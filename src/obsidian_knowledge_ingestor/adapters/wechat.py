@@ -7,7 +7,7 @@ from ..browser_automation import discover_wechat_article_urls, fetch_pages_with_
 from ..html_tools import extract_summary, extract_title
 from ..models import RawItem
 from ..utils import slugify
-from .feed import fetch_feed_entries, fetch_text, filter_since, load_seed_pages
+from .feed import SeedPage, fetch_feed_entries, fetch_text, filter_since, load_seed_pages
 
 
 class WeChatAccessError(RuntimeError):
@@ -83,17 +83,22 @@ def _browser_seed_pages(target: dict) -> list[tuple[str, str]]:
     return [(page.url, page.html) for page in browser_pages]
 
 
+def _html_seed_pages(target: dict) -> list[SeedPage]:
+    html_targets = {**target, "page_urls": []}
+    return load_seed_pages(html_targets, auth_ctx=None)
+
+
 def fetch_source(target: dict, auth_ctx: dict | None, since: datetime | None) -> list[RawItem]:
     author_id = target.get("account_id") or slugify(target.get("account_name", "wechat-account"))
     author_name = target.get("account_name") or author_id
 
-    seed_pages = load_seed_pages(target, auth_ctx)
-    if seed_pages:
-        return [_raw_item_from_page(page.url, page.html, author_id, author_name) for page in seed_pages]
-
     browser_pages = _browser_seed_pages(target)
     if browser_pages:
         return [_raw_item_from_page(url, html, author_id, author_name) for url, html in browser_pages]
+
+    seed_pages = _html_seed_pages(target)
+    if seed_pages:
+        return [_raw_item_from_page(page.url, page.html, author_id, author_name) for page in seed_pages]
 
     feed_url = target["feed_url"]
     entries = filter_since(fetch_feed_entries(feed_url, auth_ctx), since)

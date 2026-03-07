@@ -8,7 +8,7 @@
     "storage_state": "./state/browser/wechat.json",
     "user_data_dir": "./state/browser-profile/wechat",
     "channel": "chrome",
-    "headless": true,
+    "headless": false,
     "scroll_steps": 2,
     "delay_ms": 800,
     "max_items": 30,
