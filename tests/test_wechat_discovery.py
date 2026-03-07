@@ -8,8 +8,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from obsidian_knowledge_ingestor.wechat_discovery import (
+    _extract_seed_url_candidates,
     _extract_urls_from_general_msg_list,
-    discover_from_local_profile,
     discover_from_profile_ext,
     normalize_article_url,
 )
@@ -26,20 +26,10 @@ class WeChatDiscoveryTests(unittest.TestCase):
             "https://mp.weixin.qq.com/s?__biz=MzAwMDYwMTQ4Mg%3D%3D&idx=2&mid=2649470534&sn=abc",
         )
 
-    def test_discover_from_local_profile_reads_history_and_share_data(self) -> None:
+    def test_extract_seed_url_candidates_reads_share_data(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             base = Path(tmp_dir) / "multitab_e309f1787e0d9b7476197212293241eb" / "Default"
             base.mkdir(parents=True)
-
-            history = base / "History"
-            conn = sqlite3.connect(history)
-            conn.execute("create table urls (url text, title text, last_visit_time integer)")
-            conn.execute(
-                "insert into urls values (?, ?, ?)",
-                ("https://mp.weixin.qq.com/s/demo-1", "大魔王的后花园", 1),
-            )
-            conn.commit()
-            conn.close()
 
             share_db = base / "Share Data"
             conn = sqlite3.connect(share_db)
@@ -49,24 +39,22 @@ class WeChatDiscoveryTests(unittest.TestCase):
             conn.execute(
                 "insert into share_data_table (url, real_url, author, share_data) values (?, ?, ?, ?)",
                 (
-                    "",
-                    "",
-                    "大魔王的后花园",
+                    "https://mp.weixin.qq.com/s/short-seed",
                     "https://mp.weixin.qq.com/s?__biz=MzAwMDYwMTQ4Mg==&mid=2649470534&idx=2&sn=9709dd887e85d5203e920d8ff9a3f067&pass_ticket=secret",
+                    "大魔王的后花园",
+                    "",
                 ),
             )
             conn.commit()
             conn.close()
 
-            report = discover_from_local_profile("大魔王的后花园", account_biz="MzAwMDYwMTQ4Mg==", profile_root=tmp_dir)
+            report = _extract_seed_url_candidates("大魔王的后花园", account_biz="MzAwMDYwMTQ4Mg==", profile_root=tmp_dir)
             self.assertEqual(
-                report.urls,
+                report,
                 [
-                    "https://mp.weixin.qq.com/s/demo-1",
-                    "https://mp.weixin.qq.com/s?__biz=MzAwMDYwMTQ4Mg%3D%3D&idx=2&mid=2649470534&sn=9709dd887e85d5203e920d8ff9a3f067",
+                    "https://mp.weixin.qq.com/s?__biz=MzAwMDYwMTQ4Mg==&mid=2649470534&idx=2&sn=9709dd887e85d5203e920d8ff9a3f067&pass_ticket=secret",
                 ],
             )
-            self.assertTrue(report.sources)
 
     def test_extract_urls_from_general_msg_list_handles_single_and_multi(self) -> None:
         payload = {

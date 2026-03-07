@@ -9,10 +9,10 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 
-from .browser_automation import BrowserAutomationError, _load_playwright, _new_context
+from .browser_automation import _load_playwright, _new_context
 from .utils import ensure_dir
 
 ARTICLE_PATTERNS = [
@@ -104,41 +104,6 @@ def _sqlite_lines(db_path: Path, sql: str) -> list[str]:
         conn.close()
 
 
-def _scan_history_db(db_path: Path, account_name: str | None, account_biz: str | None) -> list[str]:
-    lines = _sqlite_lines(db_path, "select url, title from urls where url like 'https://mp.weixin.qq.com/%' order by last_visit_time desc")
-    urls: list[str] = []
-    for line in lines:
-        url, _, title = line.partition("\t")
-        if not url:
-            continue
-        if not any(pattern.fullmatch(url) for pattern in ARTICLE_PATTERNS):
-            continue
-        if account_name and account_name not in title and account_biz and account_biz not in url:
-            continue
-        urls.append(url)
-    return urls
-
-
-def _scan_share_db(db_path: Path, account_name: str | None, account_biz: str | None) -> list[str]:
-    lines = _sqlite_lines(db_path, "select url, real_url, author, share_data from share_data_table")
-    urls: list[str] = []
-    for line in lines:
-        parts = line.split("\t", 3)
-        blob = parts[3] if len(parts) == 4 else ""
-        candidates = []
-        for idx in (0, 1):
-            if idx < len(parts) and parts[idx]:
-                candidates.extend(_extract_urls(parts[idx]))
-        haystack = unquote(blob)
-        if account_biz and account_biz not in haystack and account_biz not in "\t".join(parts[:3]):
-            continue
-        if account_name and account_name not in haystack and account_name not in "\t".join(parts[:3]):
-            continue
-        candidates.extend(_extract_urls(haystack))
-        urls.extend(candidates)
-    return urls
-
-
 def _scan_share_db_rows(db_path: Path, account_name: str | None, account_biz: str | None) -> list[tuple[str, str, str]]:
     lines = _sqlite_lines(db_path, "select url, real_url, author from share_data_table")
     rows: list[tuple[str, str, str]] = []
@@ -151,18 +116,6 @@ def _scan_share_db_rows(db_path: Path, account_name: str | None, account_biz: st
             continue
         rows.append((url, real_url, author))
     return rows
-
-
-def _scan_text_file(path: Path, account_name: str | None, account_biz: str | None) -> list[str]:
-    try:
-        text = path.read_text(errors="ignore")
-    except OSError:
-        return []
-    if account_biz and account_biz not in text and not (account_name and account_name in text):
-        return []
-    if account_name and account_name not in text and not (account_biz and account_biz in text):
-        return []
-    return _extract_urls(unquote(text))
 
 
 def _extract_seed_url_candidates(
@@ -321,67 +274,6 @@ def discover_from_profile_ext(
 
     return DiscoveryReport(urls=_dedupe(all_urls), sources=_dedupe_raw(sources), captcha=None, screenshot_path=None)
 
-
-def discover_from_local_profile(
-    account_name: str,
-    *,
-    account_biz: str | None = None,
-    profile_root: str | Path | None = None,
-    limit: int = 500,
-) -> DiscoveryReport:
-    root = Path(profile_root).expanduser() if profile_root else WECHAT_PROFILE_DEFAULT
-    if not root.exists():
-        raise WeChatDiscoveryError(f"WeChat local profile root not found: {root}")
-
-    sources: list[str] = []
-    urls: list[str] = []
-
-    candidates = [
-        root / "multitab_e309f1787e0d9b7476197212293241eb" / "Default",
-        root / "multitab_e309f1787e0d9b7476197212293241eb",
-        root / "webview_e309f1787e0d9b7476197212293241eb",
-    ]
-    existing = [path for path in candidates if path.exists()]
-    if not existing:
-        raise WeChatDiscoveryError(f"No WeChat local profiles found under {root}")
-
-    with tempfile.TemporaryDirectory(prefix="wechat-discovery-") as tmp_dir:
-        temp_dir = Path(tmp_dir)
-        for base in existing:
-            for name in ("History", "History.wxbak", "Share Data"):
-                copied = _copy_if_exists(base / name, temp_dir)
-                if copied is None:
-                    continue
-                try:
-                    if name.startswith("History"):
-                        found = _scan_history_db(copied, account_name, account_biz)
-                    else:
-                        found = _scan_share_db(copied, account_name, account_biz)
-                except sqlite3.DatabaseError:
-                    found = []
-                if found:
-                    sources.append(str(base / name))
-                    urls.extend(found)
-
-            for rel in (
-                Path("Local Storage/leveldb"),
-                Path("IndexedDB/https_mp.weixin.qq.com_0.indexeddb.leveldb"),
-                Path("Sessions"),
-            ):
-                folder = base / rel
-                if not folder.exists():
-                    continue
-                found_here: list[str] = []
-                for path in folder.glob("*"):
-                    found_here.extend(_scan_text_file(path, account_name, account_biz))
-                if found_here:
-                    sources.append(str(folder))
-                    urls.extend(found_here)
-
-    deduped = _dedupe(urls)
-    return DiscoveryReport(urls=deduped[:limit], sources=sources, captcha=None, screenshot_path=None)
-
-
 def discover_from_sogou(
     query: str,
     *,
@@ -442,19 +334,16 @@ def discover_wechat_history(
     output_dir: str | Path | None = None,
     min_urls_before_search: int = 5,
 ) -> DiscoveryReport:
-    local_report = discover_from_local_profile(account_name, account_biz=account_biz, profile_root=profile_root)
     profile_ext_report = discover_from_profile_ext(
         account_name,
         account_biz=account_biz,
         seed_urls=seed_urls,
         profile_root=profile_root,
     )
-    combined_local_urls = _dedupe(local_report.urls + profile_ext_report.urls)
-    combined_local_sources = local_report.sources + [source for source in profile_ext_report.sources if source not in local_report.sources]
-    if len(combined_local_urls) >= min_urls_before_search:
+    if len(profile_ext_report.urls) >= min_urls_before_search:
         return DiscoveryReport(
-            urls=combined_local_urls,
-            sources=combined_local_sources,
+            urls=profile_ext_report.urls,
+            sources=profile_ext_report.sources,
             captcha=None,
             screenshot_path=None,
         )
@@ -467,8 +356,8 @@ def discover_wechat_history(
         user_data_dir=user_data_dir,
         output_dir=output_dir,
     )
-    combined_urls = _dedupe(combined_local_urls + sogou_report.urls)
-    combined_sources = combined_local_sources + [source for source in sogou_report.sources if source not in combined_local_sources]
+    combined_urls = _dedupe(profile_ext_report.urls + sogou_report.urls)
+    combined_sources = profile_ext_report.sources + [source for source in sogou_report.sources if source not in profile_ext_report.sources]
     return DiscoveryReport(
         urls=combined_urls,
         sources=combined_sources,
