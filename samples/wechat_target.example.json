@@ -5,5 +5,11 @@
   "auth_ctx": {
     "cookie": "appmsg_token=your_token_here",
     "user_agent": "Mozilla/5.0"
-  }
+  },
+  "page_urls": [
+    "https://mp.weixin.qq.com/s/your-article-url"
+  ],
+  "html_paths": [
+    "/absolute/path/to/saved-article.html"
+  ]
 }

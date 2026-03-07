@@ -42,7 +42,11 @@ def main(argv: list[str] | None = None) -> int:
         config.vault_path = config.vault_path.__class__(args.vault).expanduser()
 
     if args.command == "ingest":
-        report = ingest_source(args.source, args.target, config=config)
+        try:
+            report = ingest_source(args.source, args.target, config=config)
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
         print(json.dumps(report.__dict__, ensure_ascii=False, indent=2))
         return 0
 

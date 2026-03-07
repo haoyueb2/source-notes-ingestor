@@ -42,3 +42,6 @@ state/*.db
 state/*.sqlite
 state/*.sqlite3
 state/*.jsonl
+
+# Playwright CLI
+.playwright-cli/

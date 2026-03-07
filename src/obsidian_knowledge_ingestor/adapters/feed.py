@@ -3,11 +3,18 @@ from __future__ import annotations
 import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 from typing import Iterable
+from urllib.error import HTTPError
 
 from ..utils import parse_datetime
 
 USER_AGENT = "obsidian-knowledge-ingestor/0.1 (+https://local)"
+
+
+class FetchError(RuntimeError):
+    pass
 
 
 @dataclass(slots=True)
@@ -15,9 +22,15 @@ class FeedEntry:
     title: str
     link: str
     summary: str
-    published_at: object
-    updated_at: object
+    published_at: datetime | None
+    updated_at: datetime | None
     categories: list[str]
+
+
+@dataclass(slots=True)
+class SeedPage:
+    url: str
+    html: str
 
 
 def _build_request(url: str, auth_ctx: dict[str, str] | None = None) -> urllib.request.Request:
@@ -31,8 +44,13 @@ def _build_request(url: str, auth_ctx: dict[str, str] | None = None) -> urllib.r
 
 
 def fetch_text(url: str, auth_ctx: dict[str, str] | None = None) -> str:
-    with urllib.request.urlopen(_build_request(url, auth_ctx), timeout=30) as response:
-        return response.read().decode("utf-8", errors="replace")
+    try:
+        with urllib.request.urlopen(_build_request(url, auth_ctx), timeout=30) as response:
+            return response.read().decode("utf-8", errors="replace")
+    except HTTPError as exc:
+        raise FetchError(f"HTTP {exc.code} while fetching {url}") from exc
+    except Exception as exc:
+        raise FetchError(f"Failed to fetch {url}: {exc}") from exc
 
 
 def parse_feed(xml_text: str) -> list[FeedEntry]:
@@ -77,7 +95,7 @@ def fetch_feed_entries(feed_url: str, auth_ctx: dict[str, str] | None = None) ->
     return parse_feed(fetch_text(feed_url, auth_ctx))
 
 
-def filter_since(entries: Iterable[FeedEntry], since) -> list[FeedEntry]:
+def filter_since(entries: Iterable[FeedEntry], since: datetime | None) -> list[FeedEntry]:
     if since is None:
         return list(entries)
     kept = []
@@ -87,3 +105,13 @@ def filter_since(entries: Iterable[FeedEntry], since) -> list[FeedEntry]:
         elif entry.published_at and entry.published_at > since:
             kept.append(entry)
     return kept
+
+
+def load_seed_pages(target: dict, auth_ctx: dict[str, str] | None = None) -> list[SeedPage]:
+    pages: list[SeedPage] = []
+    for url in target.get("page_urls", []):
+        pages.append(SeedPage(url=url, html=fetch_text(url, auth_ctx)))
+    for path in target.get("html_paths", []):
+        html_path = Path(path).expanduser()
+        pages.append(SeedPage(url=target.get("base_url") or html_path.as_uri(), html=html_path.read_text(encoding="utf-8")))
+    return pages

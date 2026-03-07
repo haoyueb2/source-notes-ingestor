@@ -4,17 +4,25 @@ A local-first ingestion pipeline for collecting Zhihu and WeChat content, normal
 
 ## What is implemented now
 - A runnable Python package and CLI: `oki`
-- Source adapters for feed-driven Zhihu and WeChat ingestion
+- Source adapters for feed-driven and manual-seed Zhihu/WeChat ingestion
 - HTML-to-Markdown normalization into a canonical note model
 - Obsidian vault writer with frontmatter, raw HTML archival, asset download, and sync state tracking
 - Obsidian CLI query wrapper for `search`, `read`, and `ask`
-- Unit tests for normalization, note writing, and incremental skip behavior
+- Unit tests for normalization, note writing, incremental skip behavior, and WeChat verification-wall detection
 
 ## What is not implemented yet
 - Full logged-in browser automation for Zhihu author pages
-- Full-history WeChat account extraction without an RSS-style source
+- Full-history WeChat account extraction without an RSS-style source or saved HTML
 - Scheduler, retries, structured logging, or containerization
 - High-maintenance anti-bot modules
+
+## Real-world constraint discovered during live checks
+- Zhihu profile pages can return `HTTP 403` to non-browser collection.
+- WeChat article pages can return a human-verification wall instead of article content.
+- Because of that, the current minimum viable system supports three ingestion modes:
+  - `feed_url`: preferred when an RSS-style source is available
+  - `page_urls`: direct URL seeds when a page is accessible from the current session
+  - `html_paths`: saved HTML files when the live page requires login or verification
 
 ## Project layout
 - `src/obsidian_knowledge_ingestor/`: runtime package
@@ -33,7 +41,7 @@ These logical interfaces remain the contract for future work:
 ## Quick start
 1. Create a virtual environment and install the package in editable mode.
 2. Set `OBSIDIAN_VAULT_PATH` to your target vault.
-3. Copy one of the sample target files and replace the feed URL plus auth fields.
+3. Copy one of the sample target files and replace the source fields.
 4. Run `oki ingest` for the source you want.
 5. Use `oki search`, `oki read`, or `oki ask` once the official Obsidian CLI is available in `PATH`.
 
@@ -44,12 +52,12 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 export OBSIDIAN_VAULT_PATH=/absolute/path/to/your/vault
-cp samples/zhihu_target.example.json /tmp/zhihu_target.json
-oki ingest zhihu --target /tmp/zhihu_target.json
+cp samples/wechat_target.example.json /tmp/wechat_target.json
+oki ingest wechat --target /tmp/wechat_target.json
 ```
 
 ## Target config shape
-Zhihu feed target example:
+Zhihu target example:
 ```json
 {
   "feed_url": "https://rsshub.example.com/zhihu/people/example/answers",
@@ -58,11 +66,17 @@ Zhihu feed target example:
   "auth_ctx": {
     "cookie": "z_c0=your_cookie_here",
     "user_agent": "Mozilla/5.0"
-  }
+  },
+  "page_urls": [
+    "https://www.zhihu.com/question/1/answer/123"
+  ],
+  "html_paths": [
+    "/absolute/path/to/saved-answer.html"
+  ]
 }
 ```
 
-WeChat feed target example:
+WeChat target example:
 ```json
 {
   "feed_url": "https://we-mp-rss.example.com/account/example/feed.xml",
@@ -71,7 +85,13 @@ WeChat feed target example:
   "auth_ctx": {
     "cookie": "appmsg_token=your_token_here",
     "user_agent": "Mozilla/5.0"
-  }
+  },
+  "page_urls": [
+    "https://mp.weixin.qq.com/s/your-article-url"
+  ],
+  "html_paths": [
+    "/absolute/path/to/saved-article.html"
+  ]
 }
 ```
 
@@ -95,5 +115,5 @@ oki ask "这个人最近怎么看 AI Agent" --scope "Example Author"
 
 ## Source strategy
 - Zhihu: RSS or another stable public feed first, then logged-in fetchers later.
-- WeChat: RSS-style conversion flow first, backfill exporter later.
+- WeChat: RSS-style conversion flow first, saved HTML or backfill exporter next.
 - The vault remains the only agent-facing source of truth.
