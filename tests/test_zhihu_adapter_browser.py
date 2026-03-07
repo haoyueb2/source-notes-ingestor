@@ -32,9 +32,9 @@ class ZhihuBrowserAdapterTests(unittest.TestCase):
             )
         ]
         with patch("obsidian_knowledge_ingestor.adapters.zhihu.discover_zhihu_profile_urls", return_value=[pages[0].url]), patch(
-            "obsidian_knowledge_ingestor.adapters.zhihu.fetch_pages_with_browser", return_value=pages
+            "obsidian_knowledge_ingestor.adapters.zhihu.iter_pages_with_browser", return_value=iter(pages)
         ):
-            items = fetch_source(target, auth_ctx=None, since=None)
+            items = list(fetch_source(target, auth_ctx=None, since=None))
 
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].content_type, "answer")

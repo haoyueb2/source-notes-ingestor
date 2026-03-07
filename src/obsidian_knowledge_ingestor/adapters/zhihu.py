@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import urllib.request
+from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
-from ..browser_automation import discover_zhihu_profile_urls, fetch_pages_with_browser
+from ..browser_automation import discover_zhihu_profile_urls, fetch_pages_with_browser, iter_pages_with_browser
 from ..html_tools import extract_summary, extract_title
 from ..models import RawItem
 from ..utils import parse_datetime, slugify
@@ -253,7 +255,7 @@ def _raw_item_from_page(url: str, html: str, author_id: str, author_name: str) -
     )
 
 
-def _browser_seed_pages(target: dict) -> list[tuple[str, str]]:
+def _browser_seed_pages(target: dict) -> Iterator[tuple[str, str]]:
     browser_cfg = target.get("browser") or {}
     if not browser_cfg.get("enabled"):
         return []
@@ -279,7 +281,7 @@ def _browser_seed_pages(target: dict) -> list[tuple[str, str]]:
     if not page_urls:
         return []
 
-    browser_pages = fetch_pages_with_browser(
+    for page in iter_pages_with_browser(
         page_urls,
         storage_state,
         browser_channel=browser_cfg.get("channel", "chrome"),
@@ -287,17 +289,15 @@ def _browser_seed_pages(target: dict) -> list[tuple[str, str]]:
         scroll_steps=browser_cfg.get("scroll_steps", 2),
         delay_ms=browser_cfg.get("delay_ms", 800),
         user_data_dir=browser_cfg.get("user_data_dir"),
-    )
-    return [(page.url, page.html) for page in browser_pages]
+    ):
+        yield (page.url, page.html)
 
 
-def _materialize_pages(pages: list[tuple[str, str]], author_id: str, author_name: str) -> list[RawItem]:
-    items: list[RawItem] = []
+def _iter_materialize_pages(pages: Iterable[tuple[str, str]], author_id: str, author_name: str) -> Iterator[RawItem]:
     for url, html in pages:
         item = _raw_item_from_page(url, html, author_id, author_name)
         if item is not None:
-            items.append(item)
-    return items
+            yield item
 
 
 def _dedupe_items(items: list[RawItem]) -> list[RawItem]:
@@ -312,7 +312,7 @@ def _dedupe_items(items: list[RawItem]) -> list[RawItem]:
     return deduped
 
 
-def fetch_source(target: dict, auth_ctx: dict | None, since: datetime | None) -> list[RawItem]:
+def fetch_source(target: dict, auth_ctx: dict | None, since: datetime | None) -> Iterable[RawItem]:
     author_id = target.get("author_id") or slugify(target.get("author_name", "zhihu-author"))
     author_name = target.get("author_name") or author_id
     browser_cfg = target.get("browser") or {}
@@ -322,11 +322,29 @@ def fetch_source(target: dict, auth_ctx: dict | None, since: datetime | None) ->
 
     seed_pages = load_seed_pages(target, auth_ctx)
     if seed_pages:
-        return _dedupe_items(_materialize_pages([(page.url, page.html) for page in seed_pages], author_id, author_name))
+        return _dedupe_items(list(_iter_materialize_pages([(page.url, page.html) for page in seed_pages], author_id, author_name)))
 
     browser_pages = _browser_seed_pages(target)
     if browser_pages:
-        return _dedupe_items(_materialize_pages(browser_pages, author_id, author_name))
+        seen: set[tuple[str, str]] = set()
+
+        def _iter_browser_items() -> Iterator[RawItem]:
+            fetched_pages = 0
+            yielded = 0
+            for page_url, html in browser_pages:
+                fetched_pages += 1
+                item = _raw_item_from_page(page_url, html, author_id, author_name)
+                if item is None:
+                    continue
+                key = (item.content_type, item.content_id)
+                if key in seen:
+                    continue
+                seen.add(key)
+                yielded += 1
+                print(f"[zhihu] matched {yielded} items after {fetched_pages} fetched pages", file=sys.stderr)
+                yield item
+
+        return _iter_browser_items()
 
     feed_url = target["feed_url"]
     entries = filter_since(fetch_feed_entries(feed_url, auth_ctx), since)

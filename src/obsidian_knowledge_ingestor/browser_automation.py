@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
+from collections.abc import Iterator
 
 from bs4 import BeautifulSoup
 
@@ -54,6 +57,18 @@ def _launch_args() -> list[str]:
         "--disable-blink-features=AutomationControlled",
         "--disable-features=IsolateOrigins,site-per-process",
     ]
+
+
+def _copy_user_data_dir(user_data_dir: str | Path) -> tuple[Path, Path]:
+    source = Path(user_data_dir).expanduser()
+    temp_root = Path(tempfile.mkdtemp(prefix="oki-browser-profile-"))
+    profile_copy = temp_root / "profile"
+    shutil.copytree(
+        source,
+        profile_copy,
+        ignore=shutil.ignore_patterns("Singleton*", "lockfile", "Crashpad", "Default/Cache", "Default/Code Cache"),
+    )
+    return profile_copy, temp_root
 
 
 def save_login_session(
@@ -105,16 +120,17 @@ def _new_context(
     profile_dir = Path(user_data_dir).expanduser() if user_data_dir else None
     if profile_dir:
         ensure_dir(profile_dir)
+        isolated_profile, cleanup_root = _copy_user_data_dir(profile_dir)
         context = playwright.chromium.launch_persistent_context(
-            str(profile_dir),
+            str(isolated_profile),
             channel=browser_channel,
             headless=headless,
             args=_launch_args(),
         )
-        return None, context
+        return None, context, cleanup_root
     browser = playwright.chromium.launch(channel=browser_channel, headless=headless, args=_launch_args())
     context = browser.new_context(storage_state=str(storage_state_path) if storage_state_path else None)
-    return browser, context
+    return browser, context, None
 
 
 def _scroll_page(page, steps: int, delay_ms: int) -> None:
@@ -150,6 +166,47 @@ def _extract_links_from_html(html: str, base_url: str, patterns: list[re.Pattern
     return deduped
 
 
+def iter_pages_with_browser(
+    urls: list[str],
+    storage_state_path: str | Path,
+    *,
+    browser_channel: str = "chrome",
+    headless: bool = True,
+    scroll_steps: int = 2,
+    delay_ms: int = 800,
+    user_data_dir: str | Path | None = None,
+) -> Iterator[BrowserPage]:
+    sync_playwright, PlaywrightTimeoutError = _load_playwright()
+    storage_state = Path(storage_state_path).expanduser()
+    if not storage_state.exists():
+        raise BrowserAutomationError(f"Browser storage state not found: {storage_state}")
+
+    with sync_playwright() as playwright:
+        browser, context, cleanup_root = _new_context(playwright, storage_state, browser_channel, headless, user_data_dir=user_data_dir)
+        try:
+            total = len(urls)
+            print(f"[browser] fetch queue size={total}", file=sys.stderr)
+            for index, url in enumerate(urls, start=1):
+                page = context.new_page()
+                try:
+                    print(f"[browser] fetch {index}/{total} {url}", file=sys.stderr)
+                    page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                    if "zhihu.com" in page.url and _zhihu_challenge(page):
+                        raise BrowserAutomationError(f"Zhihu challenge required at {page.url}. Complete verification in the persistent browser profile, then retry.")
+                    _scroll_page(page, scroll_steps, delay_ms)
+                    yield BrowserPage(url=page.url, html=page.content())
+                except PlaywrightTimeoutError as exc:
+                    raise BrowserAutomationError(f"Timed out while loading {url}") from exc
+                finally:
+                    page.close()
+        finally:
+            context.close()
+            if browser is not None:
+                browser.close()
+            if cleanup_root is not None:
+                shutil.rmtree(cleanup_root, ignore_errors=True)
+
+
 def fetch_pages_with_browser(
     urls: list[str],
     storage_state_path: str | Path,
@@ -160,33 +217,17 @@ def fetch_pages_with_browser(
     delay_ms: int = 800,
     user_data_dir: str | Path | None = None,
 ) -> list[BrowserPage]:
-    sync_playwright, PlaywrightTimeoutError = _load_playwright()
-    storage_state = Path(storage_state_path).expanduser()
-    if not storage_state.exists():
-        raise BrowserAutomationError(f"Browser storage state not found: {storage_state}")
-
-    pages: list[BrowserPage] = []
-    with sync_playwright() as playwright:
-        browser, context = _new_context(playwright, storage_state, browser_channel, headless, user_data_dir=user_data_dir)
-        try:
-            for url in urls:
-                page = context.new_page()
-                try:
-                    print(f"[browser] fetch {url}", file=sys.stderr)
-                    page.goto(url, wait_until="domcontentloaded", timeout=45000)
-                    if "zhihu.com" in page.url and _zhihu_challenge(page):
-                        raise BrowserAutomationError(f"Zhihu challenge required at {page.url}. Complete verification in the persistent browser profile, then retry.")
-                    _scroll_page(page, scroll_steps, delay_ms)
-                    pages.append(BrowserPage(url=page.url, html=page.content()))
-                except PlaywrightTimeoutError as exc:
-                    raise BrowserAutomationError(f"Timed out while loading {url}") from exc
-                finally:
-                    page.close()
-        finally:
-            context.close()
-            if browser is not None:
-                browser.close()
-    return pages
+    return list(
+        iter_pages_with_browser(
+            urls,
+            storage_state_path,
+            browser_channel=browser_channel,
+            headless=headless,
+            scroll_steps=scroll_steps,
+            delay_ms=delay_ms,
+            user_data_dir=user_data_dir,
+        )
+    )
 
 
 def discover_zhihu_profile_urls(
@@ -222,7 +263,7 @@ def discover_zhihu_profile_urls(
     discovered: list[str] = []
     seen: set[str] = set()
     with sync_playwright() as playwright:
-        browser, context = _new_context(playwright, storage_state, browser_channel, headless, user_data_dir=user_data_dir)
+        browser, context, cleanup_root = _new_context(playwright, storage_state, browser_channel, headless, user_data_dir=user_data_dir)
         try:
             page = context.new_page()
             try:
@@ -237,6 +278,8 @@ def discover_zhihu_profile_urls(
                         if link not in seen:
                             seen.add(link)
                             discovered.append(link)
+                            if len(discovered) % 10 == 0:
+                                print(f"[browser] discovered {len(discovered)} urls so far", file=sys.stderr)
                             if len(discovered) >= max_items:
                                 return discovered
             except PlaywrightTimeoutError as exc:
@@ -247,6 +290,8 @@ def discover_zhihu_profile_urls(
             context.close()
             if browser is not None:
                 browser.close()
+            if cleanup_root is not None:
+                shutil.rmtree(cleanup_root, ignore_errors=True)
     return discovered
 
 
