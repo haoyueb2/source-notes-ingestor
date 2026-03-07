@@ -11,6 +11,7 @@ from .config import AppConfig
 from .pipeline import ingest_source
 from .verification import verify_zhihu_ingestion
 from .qa_runner import ObsidianCliUnavailableError, query_vault, read_note, search
+from .wechat_discovery import WeChatDiscoveryError, discover_wechat_history
 
 
 DEFAULT_LOGIN_URLS = {
@@ -40,6 +41,11 @@ def build_parser() -> argparse.ArgumentParser:
     verify_parser.add_argument("--target", required=True, help="Path to source target JSON")
     verify_parser.add_argument("--vault", help="Override Obsidian vault path")
     verify_parser.add_argument("--out", help="Optional JSON report output path")
+
+    discover_parser = subparsers.add_parser("discover", help="Discover source URLs without ingesting content")
+    discover_parser.add_argument("source", choices=["wechat"])
+    discover_parser.add_argument("--target", required=True, help="Path to source target JSON")
+    discover_parser.add_argument("--output-dir", help="Directory for screenshots and debug artifacts")
 
     search_parser = subparsers.add_parser("search", help="Search the Obsidian vault via official CLI")
     search_parser.add_argument("query")
@@ -109,6 +115,28 @@ def main(argv: list[str] | None = None) -> int:
         try:
             report = ingest_source(args.source, args.target, config=config)
         except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(json.dumps(asdict(report), ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "discover":
+        if args.source != "wechat":
+            print(f"Unsupported discover source: {args.source}", file=sys.stderr)
+            return 1
+        target = json.loads(Path(args.target).read_text())
+        browser_cfg = target.get("browser") or {}
+        try:
+            report = discover_wechat_history(
+                target.get("account_name", "wechat-account"),
+                account_biz=target.get("account_biz"),
+                seed_urls=target.get("page_urls"),
+                browser_channel=browser_cfg.get("channel", "chrome"),
+                headless=browser_cfg.get("headless", True),
+                user_data_dir=browser_cfg.get("user_data_dir"),
+                output_dir=args.output_dir,
+            )
+        except WeChatDiscoveryError as exc:
             print(str(exc), file=sys.stderr)
             return 1
         print(json.dumps(asdict(report), ensure_ascii=False, indent=2))

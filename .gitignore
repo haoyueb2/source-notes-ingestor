@@ -50,6 +50,7 @@ demo-vault/
 
 # Playwright CLI
 .playwright-cli/
+output/
 
 # Packaging
 *.egg-info/
