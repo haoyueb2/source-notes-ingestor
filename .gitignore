@@ -45,3 +45,6 @@ state/*.jsonl
 
 # Playwright CLI
 .playwright-cli/
+
+# Packaging
+*.egg-info/

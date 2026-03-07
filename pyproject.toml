@@ -9,6 +9,9 @@ description = "Local-first ingestion pipeline from Zhihu and WeChat into Obsidia
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
+dependencies = [
+  "beautifulsoup4>=4.12",
+]
 authors = [
   {name = "haoyueb2"}
 ]
@@ -22,6 +25,11 @@ classifiers = [
 
 [project.scripts]
 oki = "obsidian_knowledge_ingestor.cli:main"
+
+[project.optional-dependencies]
+browser = [
+  "playwright>=1.51",
+]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

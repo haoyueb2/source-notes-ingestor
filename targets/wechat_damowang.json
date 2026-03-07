@@ -12,9 +12,5 @@
     "delay_ms": 800,
     "max_items": 30,
     "discover_from_seed": true
-  },
-  "feed_url": "https://we-mp-rss.example.com/account/example/feed.xml",
-  "html_paths": [
-    "/absolute/path/to/saved-article.html"
-  ]
+  }
 }

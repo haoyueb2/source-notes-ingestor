@@ -3,15 +3,29 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
+from .browser_automation import BrowserAutomationError, default_storage_state_path, save_login_session
 from .config import AppConfig
 from .pipeline import ingest_source
 from .qa_runner import ObsidianCliUnavailableError, query_vault, read_note, search
 
 
+DEFAULT_LOGIN_URLS = {
+    "zhihu": "https://www.zhihu.com/signin",
+    "wechat": "https://mp.weixin.qq.com/",
+}
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="oki", description="Obsidian knowledge ingestion CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    auth_parser = subparsers.add_parser("auth", help="Save a browser login session for a source")
+    auth_parser.add_argument("source", choices=["zhihu", "wechat"])
+    auth_parser.add_argument("--login-url", help="Override the login or verification URL")
+    auth_parser.add_argument("--storage-state", help="Path to the browser storage state JSON")
+    auth_parser.add_argument("--channel", default="chrome", help="Playwright browser channel to use")
 
     ingest_parser = subparsers.add_parser("ingest", help="Ingest content from a supported source")
     ingest_parser.add_argument("source", choices=["zhihu", "wechat"])
@@ -39,7 +53,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     config = AppConfig.from_env()
     if getattr(args, "vault", None):
-        config.vault_path = config.vault_path.__class__(args.vault).expanduser()
+        config.vault_path = Path(args.vault).expanduser()
+
+    if args.command == "auth":
+        storage_state = args.storage_state or str(default_storage_state_path(config.state_dir, args.source))
+        login_url = args.login_url or DEFAULT_LOGIN_URLS[args.source]
+        try:
+            result = save_login_session(args.source, login_url, storage_state, browser_channel=args.channel)
+        except BrowserAutomationError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(json.dumps(result.__dict__, ensure_ascii=False, indent=2))
+        return 0
 
     if args.command == "ingest":
         try:
