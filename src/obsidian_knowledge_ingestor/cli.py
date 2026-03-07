@@ -9,6 +9,7 @@ from pathlib import Path
 from .browser_automation import BrowserAutomationError, default_storage_state_path, default_user_data_dir, save_login_session
 from .config import AppConfig
 from .pipeline import ingest_source
+from .verification import verify_zhihu_ingestion
 from .qa_runner import ObsidianCliUnavailableError, query_vault, read_note, search
 
 
@@ -33,6 +34,12 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_parser.add_argument("source", choices=["zhihu", "wechat"])
     ingest_parser.add_argument("--target", required=True, help="Path to source target JSON")
     ingest_parser.add_argument("--vault", help="Override Obsidian vault path")
+
+    verify_parser = subparsers.add_parser("verify", help="Verify ingestion counts against source-visible counts")
+    verify_parser.add_argument("source", choices=["zhihu"])
+    verify_parser.add_argument("--target", required=True, help="Path to source target JSON")
+    verify_parser.add_argument("--vault", help="Override Obsidian vault path")
+    verify_parser.add_argument("--out", help="Optional JSON report output path")
 
     search_parser = subparsers.add_parser("search", help="Search the Obsidian vault via official CLI")
     search_parser.add_argument("query")
@@ -73,6 +80,29 @@ def main(argv: list[str] | None = None) -> int:
             print(str(exc), file=sys.stderr)
             return 1
         print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "verify":
+        from .config import load_target
+        target = load_target(args.target)
+        author_id = target.get('author_id') or target.get('author_name')
+        profile_url = target.get('profile_url') or target.get('author_url') or f"https://www.zhihu.com/people/{author_id}"
+        browser_cfg = target.get('browser') or {}
+        report = verify_zhihu_ingestion(
+            profile_url=profile_url,
+            author_id=author_id,
+            user_data_dir=browser_cfg.get('user_data_dir'),
+            vault_root=args.vault or config.vault_path,
+            out_path=args.out,
+        )
+        from dataclasses import asdict as _asdict
+        print(json.dumps({
+            'author_id': report.author_id,
+            'profile_counts': report.profile_counts,
+            'accessible_counts': report.accessible_counts,
+            'vault_counts': report.vault_counts,
+            'checks': {k: _asdict(v) for k, v in report.checks.items()},
+        }, ensure_ascii=False, indent=2))
         return 0
 
     if args.command == "ingest":

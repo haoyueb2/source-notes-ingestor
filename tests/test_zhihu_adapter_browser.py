@@ -15,12 +15,20 @@ class ZhihuBrowserAdapterTests(unittest.TestCase):
                 "storage_state": "/tmp/zhihu.json",
                 "headless": True,
                 "max_items": 5,
+                "use_api": False,
             },
         }
         pages = [
             SimpleNamespace(
                 url="https://www.zhihu.com/question/1/answer/2",
-                html="<html><head><title>Answer</title></head><body><article><p>Body</p></article></body></html>",
+                html=(
+                    "<html><head><title>Answer</title></head>"
+                    "<body>"
+                    '<meta itemprop="url" content="https://www.zhihu.com/people/demo-user">'
+                    '<meta itemprop="name" content="Demo User">'
+                    "<article><p>Body</p></article>"
+                    "</body></html>"
+                ),
             )
         ]
         with patch("obsidian_knowledge_ingestor.adapters.zhihu.discover_zhihu_profile_urls", return_value=[pages[0].url]), patch(
