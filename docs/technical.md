@@ -88,9 +88,14 @@ This means the pipeline is internally consistent for accessible content, while Z
 WeChat currently supports:
 - seed article ingestion
 - browser-session page fetch
-- same-domain article discovery from seed pages
+- `discover wechat`, which derives `mp/profile_ext?action=getmsg` from a reachable seed article and paginates through history
 
-The project does not yet claim complete historical extraction from a public account without a reliable history surface.
+Important constraint:
+- local WeChat cache is no longer treated as a history-discovery source
+- it is used only to recover seed URLs with `key`, `pass_ticket`, and related query parameters when the client has already opened an article
+- the actual article history list comes from `profile_ext/getmsg`, not from cached article URLs
+
+This means the project can now recover real history for accounts that expose a usable history feed from a reachable seed article, but it still does not claim universal full-history extraction for every public account.
 
 ## Obsidian Storage Model
 Vault layout:
@@ -136,7 +141,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 ## Current Limits
 - No captcha solving
 - No guaranteed fully unattended long-running auth refresh
-- No complete WeChat historical backfill yet
+- No guaranteed complete WeChat historical backfill for accounts that do not expose a usable `profile_ext/getmsg` path
 - Zhihu answer totals can differ between profile summary and accessible answer list
 - Verification is practical, not perfect: it proves vault consistency against accessible content
 

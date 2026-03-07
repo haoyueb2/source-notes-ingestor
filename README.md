@@ -12,6 +12,7 @@ A local-first ingestion pipeline for collecting Zhihu and WeChat content, normal
 - A runnable Python package and CLI: `oki`
 - Source adapters for feed-driven, manual-seed, and browser-session Zhihu/WeChat ingestion
 - Browser-session login persistence via Playwright
+- WeChat history discovery through `discover wechat`, using `seed article -> profile_ext/getmsg -> paginated article list`
 - HTML-to-Markdown normalization into a canonical note model
 - Obsidian vault writer with frontmatter, raw HTML archival, asset download, and sync state tracking
 - Obsidian CLI query wrapper for `search`, `read`, and `ask`
@@ -19,7 +20,7 @@ A local-first ingestion pipeline for collecting Zhihu and WeChat content, normal
 
 ## What is not implemented yet
 - Fully unattended login or captcha solving
-- Full-history WeChat account extraction from a seed article without an accessible history surface
+- Full-history WeChat account extraction for accounts that do not expose a usable `profile_ext/getmsg` path from a reachable seed article
 - Scheduler, retries, structured logging, or containerization
 - High-maintenance anti-bot modules
 
@@ -138,5 +139,6 @@ oki ask "这个人最近怎么看 AI Agent" --scope "Example Author"
 
 ## Current strategy
 - Zhihu: logged-in browser automation plus API-backed ingestion and post-ingest verification.
-- WeChat: browser session fetch from one or more seed article URLs, then discover same-domain article links exposed from those pages.
+- WeChat: use one or more seed article URLs to derive a `profile_ext/getmsg` history feed, page through article history, then fetch article bodies with the browser session.
+- Local WeChat cache is used only to recover seed URLs with the required query parameters. It is not treated as a source of truth for history discovery.
 - The vault remains the only agent-facing source of truth.

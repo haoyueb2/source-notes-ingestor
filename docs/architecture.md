@@ -26,13 +26,15 @@ Design constraints:
 
 ### WeChat Official Accounts
 Primary and fallback acquisition paths are fixed in this order:
-1. `we-mp-rss`-style projects or equivalent subscription/RSS conversion flows as the preferred ingestion route.
-2. `wechat-article-exporter`-style tools for per-account full backfill when the primary route cannot provide stable history coverage.
-3. RSSHub or similar public routes only as discovery or supplemental inputs, not as the default primary source.
+1. Seed-article-driven history discovery through `mp/profile_ext?action=getmsg` when a reachable article exposes a usable history surface.
+2. `we-mp-rss`-style projects or equivalent subscription/RSS conversion flows when the first path is unavailable or insufficient.
+3. `wechat-article-exporter`-style tools for per-account backfill when the first two layers cannot provide enough coverage.
+4. RSSHub or similar public routes only as discovery or supplemental inputs, not as the default primary source.
 
 Design constraints:
 - The system targets public official account articles and lawfully accessible content only.
 - A one-time backfill path and an incremental sync path must both exist, even if they share implementation pieces.
+- Local WeChat cache may be used to recover seed URLs or session-derived parameters, but cached article links are not treated as authoritative history discovery output.
 
 ## Canonical Note Model
 Every normalized item must produce a canonical note object with these fields:
