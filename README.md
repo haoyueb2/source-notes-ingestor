@@ -2,6 +2,12 @@
 
 A local-first ingestion pipeline for collecting Zhihu and WeChat content, normalizing it into Markdown, storing it inside an Obsidian vault, and querying the vault through the official Obsidian CLI.
 
+## Docs
+- [Technical Guide (English)](docs/technical.md)
+- [技术文档（中文）](docs/technical.zh-CN.md)
+- [Architecture](docs/architecture.md)
+- [Delivery Plan](docs/plan.md)
+
 ## What is implemented now
 - A runnable Python package and CLI: `oki`
 - Source adapters for feed-driven, manual-seed, and browser-session Zhihu/WeChat ingestion
@@ -131,6 +137,6 @@ oki ask "这个人最近怎么看 AI Agent" --scope "Example Author"
 ```
 
 ## Current strategy
-- Zhihu: browser session discovery from the profile URL, then fetch the discovered answers, posts, and pins.
+- Zhihu: logged-in browser automation plus API-backed ingestion and post-ingest verification.
 - WeChat: browser session fetch from one or more seed article URLs, then discover same-domain article links exposed from those pages.
 - The vault remains the only agent-facing source of truth.
