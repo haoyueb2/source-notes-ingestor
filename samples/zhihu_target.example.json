@@ -1,0 +1,9 @@
+{
+  "feed_url": "https://rsshub.example.com/zhihu/people/example/answers",
+  "author_id": "example-author",
+  "author_name": "Example Author",
+  "auth_ctx": {
+    "cookie": "z_c0=your_cookie_here",
+    "user_agent": "Mozilla/5.0"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "feed_url": "https://we-mp-rss.example.com/account/example/feed.xml",
+  "account_id": "example-account",
+  "account_name": "Example Account",
+  "auth_ctx": {
+    "cookie": "appmsg_token=your_token_here",
+    "user_agent": "Mozilla/5.0"
+  }
+}
