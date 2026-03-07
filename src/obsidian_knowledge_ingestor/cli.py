@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
-from .browser_automation import BrowserAutomationError, default_storage_state_path, save_login_session
+from .browser_automation import BrowserAutomationError, default_storage_state_path, default_user_data_dir, save_login_session
 from .config import AppConfig
 from .pipeline import ingest_source
 from .qa_runner import ObsidianCliUnavailableError, query_vault, read_note, search
@@ -25,6 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
     auth_parser.add_argument("source", choices=["zhihu", "wechat"])
     auth_parser.add_argument("--login-url", help="Override the login or verification URL")
     auth_parser.add_argument("--storage-state", help="Path to the browser storage state JSON")
+    auth_parser.add_argument("--user-data-dir", help="Path to a persistent browser profile directory")
     auth_parser.add_argument("--channel", default="chrome", help="Playwright browser channel to use")
 
     ingest_parser = subparsers.add_parser("ingest", help="Ingest content from a supported source")
@@ -57,13 +59,20 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "auth":
         storage_state = args.storage_state or str(default_storage_state_path(config.state_dir, args.source))
+        user_data_dir = args.user_data_dir or str(default_user_data_dir(config.state_dir, args.source))
         login_url = args.login_url or DEFAULT_LOGIN_URLS[args.source]
         try:
-            result = save_login_session(args.source, login_url, storage_state, browser_channel=args.channel)
+            result = save_login_session(
+                args.source,
+                login_url,
+                storage_state,
+                browser_channel=args.channel,
+                user_data_dir=user_data_dir,
+            )
         except BrowserAutomationError as exc:
             print(str(exc), file=sys.stderr)
             return 1
-        print(json.dumps(result.__dict__, ensure_ascii=False, indent=2))
+        print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
         return 0
 
     if args.command == "ingest":
@@ -72,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
         except RuntimeError as exc:
             print(str(exc), file=sys.stderr)
             return 1
-        print(json.dumps(report.__dict__, ensure_ascii=False, indent=2))
+        print(json.dumps(asdict(report), ensure_ascii=False, indent=2))
         return 0
 
     try:

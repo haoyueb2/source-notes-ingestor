@@ -71,6 +71,7 @@ def _browser_seed_pages(target: dict) -> list[tuple[str, str]]:
             scroll_steps=browser_cfg.get("scroll_steps", 8),
             delay_ms=browser_cfg.get("delay_ms", 900),
             max_items=browser_cfg.get("max_items", 60),
+            user_data_dir=browser_cfg.get("user_data_dir"),
         )
         page_urls.extend(discovered)
 
@@ -84,6 +85,7 @@ def _browser_seed_pages(target: dict) -> list[tuple[str, str]]:
         headless=browser_cfg.get("headless", True),
         scroll_steps=browser_cfg.get("scroll_steps", 2),
         delay_ms=browser_cfg.get("delay_ms", 800),
+        user_data_dir=browser_cfg.get("user_data_dir"),
     )
     return [(page.url, page.html) for page in browser_pages]
 

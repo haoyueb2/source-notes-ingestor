@@ -42,6 +42,11 @@ state/*.db
 state/*.sqlite
 state/*.sqlite3
 state/*.jsonl
+state/browser/
+state/browser-profile/
+samples/zhihu/
+samples/wechat/
+demo-vault/
 
 # Playwright CLI
 .playwright-cli/

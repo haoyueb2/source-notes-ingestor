@@ -5,10 +5,11 @@
   "browser": {
     "enabled": true,
     "storage_state": "./state/browser/zhihu.json",
+    "user_data_dir": "./state/browser-profile/zhihu",
     "channel": "chrome",
-    "headless": true,
+    "headless": false,
     "scroll_steps": 8,
     "delay_ms": 900,
-    "max_items": 60
+    "max_items": 12
   }
 }
