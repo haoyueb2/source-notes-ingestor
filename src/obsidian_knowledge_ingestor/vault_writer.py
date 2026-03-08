@@ -62,6 +62,20 @@ def _yaml_scalar(value: str | None) -> str:
     return f'"{value}"' if value is not None else "null"
 
 
+def _note_file_name(note: CanonicalNote, note_dir: Path) -> str:
+    title_slug = slugify(note.title)
+    if note.source != "wechat":
+        return f"{note.content_id}-{title_slug}.md"
+
+    preferred = f"{title_slug}.md"
+    preferred_path = note_dir / preferred
+    if not preferred_path.exists():
+        return preferred
+
+    fallback = f"{title_slug}-{note.content_id}.md"
+    return fallback
+
+
 def _download_asset(url: str, dest_dir: Path) -> str | None:
     parsed = urlparse(url)
     name = Path(parsed.path).name or "asset"
@@ -105,7 +119,7 @@ def write_note(
     )
 
     note_dir = ensure_dir(_note_directory(note, cfg))
-    file_name = f"{note.content_id}-{slugify(note.title)}.md"
+    file_name = _note_file_name(note, note_dir)
     note_path = note_dir / file_name
 
     raw_dir = ensure_dir(cfg.raw_data_dir / note.source / slugify(note.author_name))
