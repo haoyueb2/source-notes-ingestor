@@ -74,6 +74,66 @@ class VaultWriterTests(unittest.TestCase):
             self.assertEqual(first_path.name, "Repeated-Title.md")
             self.assertEqual(second_path.name, "Repeated-Title-item-2.md")
 
+    def test_zhihu_uses_title_first_file_names(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            vault_path = root / "vault"
+            config = AppConfig(vault_path=vault_path, state_dir=root / "state", raw_data_dir=root / "raw")
+            note = CanonicalNote(
+                source="zhihu",
+                author_id="lin-lin-98-23",
+                author_name="Lin Lin",
+                content_id="2196379477",
+                content_type="answer",
+                title="为什么人类天天吃同样的东西很快会腻",
+                url="https://www.zhihu.com/question/1/answer/2196379477",
+                published_at=datetime(2026, 3, 7, tzinfo=UTC),
+                updated_at=datetime(2026, 3, 7, tzinfo=UTC),
+                tags=["answer"],
+                summary="summary",
+                markdown_body="# Title\n\nBody\n",
+                raw_html_path=None,
+                assets=[],
+                checksum="abc123",
+            )
+
+            note_path = write_note(note, vault_path, config=config, raw_html="<article>Body</article>")
+
+            self.assertEqual(note_path.name, "为什么人类天天吃同样的东西很快会腻.md")
+
+    def test_zhihu_title_collision_falls_back_to_content_id(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            vault_path = root / "vault"
+            config = AppConfig(vault_path=vault_path, state_dir=root / "state", raw_data_dir=root / "raw")
+            base_kwargs = dict(
+                source="zhihu",
+                author_id="lin-lin-98-23",
+                author_name="Lin Lin",
+                content_type="answer",
+                title="重复标题",
+                url="https://www.zhihu.com/question/1/answer/1",
+                published_at=datetime(2026, 3, 7, tzinfo=UTC),
+                updated_at=datetime(2026, 3, 7, tzinfo=UTC),
+                tags=[],
+                summary="summary",
+                markdown_body="# Title\n\nBody\n",
+                raw_html_path=None,
+            )
+
+            first = CanonicalNote(content_id="item-1", assets=[], checksum="abc123", **base_kwargs)
+            second = CanonicalNote(content_id="item-2", assets=[], checksum="def456", **base_kwargs)
+
+            first_path = write_note(first, vault_path, config=config, raw_html="<article>Body</article>")
+            second_path = write_note(second, vault_path, config=config, raw_html="<article>Body</article>")
+
+            self.assertEqual(first_path.name, "重复标题.md")
+            self.assertEqual(second_path.name, "重复标题-item-2.md")
+
 
 if __name__ == "__main__":
     unittest.main()

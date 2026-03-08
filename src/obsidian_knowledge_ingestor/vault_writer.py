@@ -64,9 +64,6 @@ def _yaml_scalar(value: str | None) -> str:
 
 def _note_file_name(note: CanonicalNote, note_dir: Path) -> str:
     title_slug = slugify(note.title)
-    if note.source != "wechat":
-        return f"{note.content_id}-{title_slug}.md"
-
     preferred = f"{title_slug}.md"
     preferred_path = note_dir / preferred
     if not preferred_path.exists():
