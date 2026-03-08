@@ -2,22 +2,33 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 
 from .browser_automation import BrowserAutomationError, default_storage_state_path, default_user_data_dir, save_login_session
-from .config import AppConfig
-from .pipeline import ingest_source
+from .config import AppConfig, load_target
+from .pipeline import IngestReport, ingest_source
 from .verification import verify_zhihu_ingestion
 from .qa_runner import ObsidianCliUnavailableError, query_vault, read_note, search
 from .wechat_discovery import WeChatDiscoveryError, discover_wechat_history
+from .utils import dump_json, load_json, slugify
+from .adapters.wechat import content_id_from_url
 
 
 DEFAULT_LOGIN_URLS = {
     "zhihu": "https://www.zhihu.com/signin",
     "wechat": "https://mp.weixin.qq.com/",
 }
+
+WECHAT_VERIFICATION_MARKERS = (
+    "WeChat returned a verification page",
+    "Complete the human verification",
+)
+WECHAT_DISABLE_RETRY_ENV = "OKI_WECHAT_DISABLE_RETRY"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -63,6 +74,85 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _wechat_state_path(target: dict, config: AppConfig) -> Path:
+    name = target.get("account_name") or target.get("account_id") or "wechat"
+    return config.vault_path / config.sync_state_dir_name / f"wechat-{slugify(name)}.json"
+
+
+def _write_wechat_resume_target(target: dict, config: AppConfig) -> Path:
+    state = load_json(_wechat_state_path(target, config))
+    done = set((state.get("items") or {}).keys())
+    remaining = [url for url in target.get("page_urls", []) if content_id_from_url(url) not in done]
+    resume_target = {**target, "page_urls": remaining}
+    out_path = config.state_dir / "resume" / f"wechat-{slugify(target.get('account_name', 'wechat'))}-resume.json"
+    dump_json(out_path, resume_target)
+    return out_path
+
+
+def _should_retry_wechat_verification(exc: RuntimeError) -> bool:
+    message = str(exc)
+    return any(marker in message for marker in WECHAT_VERIFICATION_MARKERS)
+
+
+def _ingest_wechat_with_verification_resume(target_path: str | Path, config: AppConfig) -> IngestReport:
+    target = load_target(target_path)
+    browser_cfg = target.get("browser") or {}
+    retry_delay = int(browser_cfg.get("verification_retry_delay_sec", 20))
+    max_retries = int(browser_cfg.get("verification_max_retries", 20))
+    attempt = 0
+    current_target_path = Path(target_path)
+    aggregate = IngestReport(
+        source="wechat",
+        target_name=target.get("account_name") or target.get("account_id") or "wechat",
+        fetched=0,
+        written=0,
+        skipped=0,
+        note_paths=[],
+    )
+
+    while True:
+        try:
+            if attempt == 0:
+                report = ingest_source("wechat", current_target_path, config=config)
+            else:
+                cmd = [sys.executable, "-m", "obsidian_knowledge_ingestor.cli", "ingest", "wechat", "--target", str(current_target_path)]
+                env = os.environ.copy()
+                env[WECHAT_DISABLE_RETRY_ENV] = "1"
+                env["OBSIDIAN_VAULT_PATH"] = str(config.vault_path)
+                if "PYTHONPATH" not in env:
+                    env["PYTHONPATH"] = "src"
+                result = subprocess.run(cmd, cwd=Path(__file__).resolve().parents[2], env=env, capture_output=True, text=True)
+                if result.stdout:
+                    print(result.stdout, end="")
+                if result.stderr:
+                    print(result.stderr, file=sys.stderr, end="")
+                if result.returncode != 0:
+                    raise RuntimeError((result.stderr or result.stdout).strip() or f"WeChat ingest child exited with {result.returncode}")
+                report = IngestReport(**json.loads(result.stdout))
+            aggregate.fetched += report.fetched
+            aggregate.written += report.written
+            aggregate.skipped += report.skipped
+            aggregate.note_paths.extend(report.note_paths)
+            return aggregate
+        except RuntimeError as exc:
+            if not _should_retry_wechat_verification(exc):
+                raise
+            attempt += 1
+            if attempt > max_retries:
+                raise RuntimeError(f"{exc} Retry budget exhausted after {max_retries} attempts.") from exc
+            resume_target_path = _write_wechat_resume_target(target, config)
+            resume_target = load_target(resume_target_path)
+            remaining = len(resume_target.get("page_urls", []))
+            if remaining == 0:
+                return aggregate
+            print(
+                f"[wechat] verification wall hit; retry {attempt}/{max_retries} in {retry_delay}s with {remaining} urls remaining",
+                file=sys.stderr,
+            )
+            time.sleep(retry_delay)
+            current_target_path = resume_target_path
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -89,7 +179,6 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "verify":
-        from .config import load_target
         target = load_target(args.target)
         author_id = target.get('author_id') or target.get('author_name')
         profile_url = target.get('profile_url') or target.get('author_url') or f"https://www.zhihu.com/people/{author_id}"
@@ -113,7 +202,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "ingest":
         try:
-            report = ingest_source(args.source, args.target, config=config)
+            if args.source == "wechat" and os.environ.get(WECHAT_DISABLE_RETRY_ENV) != "1":
+                report = _ingest_wechat_with_verification_resume(args.target, config=config)
+            else:
+                report = ingest_source(args.source, args.target, config=config)
         except RuntimeError as exc:
             print(str(exc), file=sys.stderr)
             return 1

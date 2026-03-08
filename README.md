@@ -13,6 +13,8 @@ A local-first ingestion pipeline for collecting Zhihu and WeChat content, normal
 - Source adapters for feed-driven, manual-seed, and browser-session Zhihu/WeChat ingestion
 - Browser-session login persistence via Playwright
 - WeChat history discovery through `discover wechat`, using `seed article -> profile_ext/getmsg -> paginated article list`
+- WeChat streaming ingestion, so Markdown notes appear while the crawl is still running
+- WeChat verification-aware resume, so `oki ingest wechat` can recompute remaining URLs from state and retry after a verification wall
 - HTML-to-Markdown normalization into a canonical note model
 - Obsidian vault writer with frontmatter, raw HTML archival, asset download, and sync state tracking
 - Obsidian CLI query wrapper for `search`, `read`, and `ask`
@@ -80,6 +82,19 @@ oki auth zhihu
 oki ingest zhihu --target /tmp/zhihu_target.json
 ```
 
+WeChat history workflow:
+```bash
+export OBSIDIAN_VAULT_PATH=/absolute/path/to/your/vault
+oki auth wechat --login-url 'https://mp.weixin.qq.com/s/PgR1HF-b9r7V37iwNNCgrw'
+oki discover wechat --target targets/wechat_damowang.json
+oki ingest wechat --target targets/wechat_damowang_discovered.json
+```
+
+Progress monitoring:
+```bash
+./scripts/watch_wechat_progress.sh "$OBSIDIAN_VAULT_PATH"
+```
+
 ## Target config shape
 Zhihu target example:
 ```json
@@ -141,4 +156,5 @@ oki ask "这个人最近怎么看 AI Agent" --scope "Example Author"
 - Zhihu: logged-in browser automation plus API-backed ingestion and post-ingest verification.
 - WeChat: use one or more seed article URLs to derive a `profile_ext/getmsg` history feed, page through article history, then fetch article bodies with the browser session.
 - Local WeChat cache is used only to recover seed URLs with the required query parameters. It is not treated as a source of truth for history discovery.
+- WeChat ingestion writes notes incrementally and relies on `Sources/_state` to resume after verification walls or process interruptions.
 - The vault remains the only agent-facing source of truth.

@@ -95,6 +95,8 @@
 - 以文章 URL 作为种子抓取
 - 复用浏览器会话抓页面
 - `discover wechat`：从可访问的 seed 文章反推出 `mp/profile_ext?action=getmsg`，再做分页历史发现
+- 抓取过程中流式落盘，而不是整批抓完后再统一写 Markdown
+- 基于 state 的验证后续跑
 
 这里要明确两点：
 - 本地微信缓存已经不再被当成“历史文章发现结果”
@@ -103,6 +105,37 @@
 也就是说，真正的历史列表来源是 `profile_ext/getmsg`，不是缓存里碰巧出现过的文章链接。
 
 因此，当前版本已经可以对“能从 seed 文章打开可用历史接口”的公众号做程序化历史发现；但仍然不能声称“任意公众号都能自动全量回溯历史文章”。
+
+### 公众号详细技术路线
+当前可用路线被明确拆成两个阶段。
+
+第一阶段：历史发现
+1. 从一个或多个可访问的 seed 文章开始。
+2. 尽量恢复完整文章 URL，包括 `__biz`、`uin`、`key`、`pass_ticket`。
+3. 抓文章 HTML，从中提取 `appmsg_token`。
+4. 用这些参数调用 `mp/profile_ext?action=getmsg`。
+5. 解析 `general_msg_list`，把单图文和多图文都展开成统一 URL 队列。
+
+第二阶段：正文入库
+1. 把发现到的文章 URL 队列交给浏览器驱动的 WeChat adapter。
+2. 对 query 形式的文章 URL，用 `mid + idx + sn` 生成稳定的 `content_id`。
+3. 每抓到一篇就立刻 `normalize`。
+4. 每 `normalize` 完一篇就立刻写 Markdown 和 state，不等整批结束。
+
+为什么要这样拆：
+- 历史发现和正文抓取的失败原因不同
+- 历史发现是否成功，可以先看 URL 队列总数
+- 正文抓取如果被打断，可以只依赖 `Sources/_state` 从剩余 URL 继续
+
+### 验证后的续跑机制
+当微信中途返回验证页时：
+1. 当前这篇不会写入
+2. 已经写入的篇目仍然留在 vault
+3. state 里已经记录了完成的 `content_id`
+4. CLI 会根据原始 target 和当前 state 重新计算剩余 URL
+5. 然后只对剩余 URL 继续重试
+
+这不是验证码破解，而是围绕人工验证边界做故障恢复。
 
 ## Obsidian 存储约定
 Vault 目录结构固定为：
@@ -123,6 +156,7 @@ Vault 目录结构固定为：
 当前 CLI：
 - `oki auth <source>`
 - `oki ingest <source> --target <file>`
+- `oki discover wechat --target <file>`
 - `oki verify zhihu --target <file> --vault <path>`
 - `oki search <query>`
 - `oki read <note-path>`
@@ -134,6 +168,8 @@ Vault 目录结构固定为：
 - Vault 写入
 - 增量跳过逻辑
 - 微信验证墙识别
+- 微信 query 文章 URL 的 `content_id` 稳定性
+- 微信历史发现解析
 - 知乎浏览器发现
 - 知乎作者归属过滤
 - 知乎校验状态分类

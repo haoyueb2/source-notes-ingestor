@@ -89,6 +89,8 @@ WeChat currently supports:
 - seed article ingestion
 - browser-session page fetch
 - `discover wechat`, which derives `mp/profile_ext?action=getmsg` from a reachable seed article and paginates through history
+- streaming note materialization while the browser queue is still being consumed
+- verification-aware resume based on vault state
 
 Important constraint:
 - local WeChat cache is no longer treated as a history-discovery source
@@ -96,6 +98,37 @@ Important constraint:
 - the actual article history list comes from `profile_ext/getmsg`, not from cached article URLs
 
 This means the project can now recover real history for accounts that expose a usable history feed from a reachable seed article, but it still does not claim universal full-history extraction for every public account.
+
+### Detailed WeChat route
+The working route is intentionally split into two phases.
+
+Phase 1: history discovery
+1. Start from one or more reachable article URLs.
+2. Recover the full article URL when possible, including `__biz`, `uin`, `key`, and `pass_ticket`.
+3. Fetch the article HTML and extract `appmsg_token`.
+4. Call `mp/profile_ext?action=getmsg` with those parameters.
+5. Parse `general_msg_list` and expand single-article plus multi-article entries into a flat URL queue.
+
+Phase 2: body ingestion
+1. Feed the discovered article URLs into the browser-backed WeChat adapter.
+2. Generate a stable `content_id` from `mid + idx + sn` for query-style article URLs.
+3. Normalize each article immediately after fetch.
+4. Write Markdown and state immediately, instead of waiting for the full queue to finish.
+
+Why this split matters:
+- discovery and ingestion fail for different reasons
+- history discovery can be validated by queue length
+- body ingestion can resume from `Sources/_state` even if WeChat interrupts the session
+
+### Verification-aware resume
+When WeChat serves a verification page mid-run:
+1. the current note is not written
+2. all previously written notes remain durable in the vault
+3. state already contains the completed `content_id`s
+4. the CLI recomputes the remaining URL queue from the original target and current state
+5. ingestion retries from the remaining URLs
+
+This is not captcha solving. It is failure recovery around a human-verification boundary.
 
 ## Obsidian Storage Model
 Vault layout:
@@ -116,6 +149,7 @@ Each note includes:
 Current CLI commands:
 - `oki auth <source>`
 - `oki ingest <source> --target <file>`
+- `oki discover wechat --target <file>`
 - `oki verify zhihu --target <file> --vault <path>`
 - `oki search <query>`
 - `oki read <note-path>`
@@ -127,6 +161,8 @@ Current automated coverage focuses on:
 - vault writing
 - incremental skip behavior
 - WeChat verification-wall detection
+- WeChat `content_id` stability for query-style article URLs
+- WeChat history discovery parsing
 - Zhihu browser discovery
 - Zhihu author filtering
 - Zhihu verification check classification

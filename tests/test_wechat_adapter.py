@@ -12,14 +12,16 @@ class WeChatAdapterTests(unittest.TestCase):
             html_path = Path(tmp_dir) / "wechat.html"
             html_path.write_text(html, encoding="utf-8")
             with self.assertRaises(WeChatAccessError):
-                fetch_source(
-                    {
-                        "account_name": "Demo Account",
-                        "html_paths": [str(html_path)],
-                        "base_url": "https://mp.weixin.qq.com/s/demo",
-                    },
-                    auth_ctx=None,
-                    since=None,
+                list(
+                    fetch_source(
+                        {
+                            "account_name": "Demo Account",
+                            "html_paths": [str(html_path)],
+                            "base_url": "https://mp.weixin.qq.com/s/demo",
+                        },
+                        auth_ctx=None,
+                        since=None,
+                    )
                 )
 
 

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import datetime
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
-from ..browser_automation import discover_wechat_article_urls, fetch_pages_with_browser
+from ..browser_automation import discover_wechat_article_urls, iter_pages_with_browser
 from ..html_tools import extract_summary, extract_title
 from ..models import RawItem
 from ..utils import slugify
@@ -16,9 +17,16 @@ class WeChatAccessError(RuntimeError):
 
 def content_id_from_url(url: str) -> str:
     parsed = urlparse(url)
-    query = parsed.query.replace("=", "-").replace("&", "-")
     tail = parsed.path.rsplit("/", 1)[-1]
-    base = tail or query or url
+    query = parse_qs(parsed.query)
+    if tail == "s" and {"mid", "idx", "sn"} <= set(query):
+        mid = query["mid"][0]
+        idx = query["idx"][0]
+        sn = query["sn"][0]
+        base = f"mid-{mid}-idx-{idx}-sn-{sn}"
+    else:
+        query_text = parsed.query.replace("=", "-").replace("&", "-")
+        base = tail or query_text or url
     return slugify(base)
 
 
@@ -46,10 +54,10 @@ def _raw_item_from_page(url: str, html: str, author_id: str, author_name: str) -
     )
 
 
-def _browser_seed_pages(target: dict) -> list[tuple[str, str]]:
+def _browser_seed_pages(target: dict) -> Iterator[tuple[str, str]]:
     browser_cfg = target.get("browser") or {}
     if not browser_cfg.get("enabled"):
-        return []
+        return iter(())
     storage_state = browser_cfg.get("storage_state")
     if not storage_state:
         raise WeChatAccessError("WeChat browser automation requires `browser.storage_state`.")
@@ -69,18 +77,21 @@ def _browser_seed_pages(target: dict) -> list[tuple[str, str]]:
         page_urls.extend(discovered)
 
     if not page_urls:
-        return []
+        return iter(())
 
-    browser_pages = fetch_pages_with_browser(
-        page_urls,
-        storage_state,
-        browser_channel=browser_cfg.get("channel", "chrome"),
-        headless=browser_cfg.get("headless", True),
-        scroll_steps=browser_cfg.get("scroll_steps", 2),
-        delay_ms=browser_cfg.get("delay_ms", 800),
-        user_data_dir=browser_cfg.get("user_data_dir"),
-    )
-    return [(page.url, page.html) for page in browser_pages]
+    def _iter() -> Iterator[tuple[str, str]]:
+        for page in iter_pages_with_browser(
+            page_urls,
+            storage_state,
+            browser_channel=browser_cfg.get("channel", "chrome"),
+            headless=browser_cfg.get("headless", True),
+            scroll_steps=browser_cfg.get("scroll_steps", 2),
+            delay_ms=browser_cfg.get("delay_ms", 800),
+            user_data_dir=browser_cfg.get("user_data_dir"),
+        ):
+            yield page.url, page.html
+
+    return _iter()
 
 
 def _html_seed_pages(target: dict) -> list[SeedPage]:
@@ -88,27 +99,35 @@ def _html_seed_pages(target: dict) -> list[SeedPage]:
     return load_seed_pages(html_targets, auth_ctx=None)
 
 
-def fetch_source(target: dict, auth_ctx: dict | None, since: datetime | None) -> list[RawItem]:
+def fetch_source(target: dict, auth_ctx: dict | None, since: datetime | None) -> Iterator[RawItem]:
     author_id = target.get("account_id") or slugify(target.get("account_name", "wechat-account"))
     author_name = target.get("account_name") or author_id
 
-    browser_pages = _browser_seed_pages(target)
-    if browser_pages:
-        return [_raw_item_from_page(url, html, author_id, author_name) for url, html in browser_pages]
+    browser_pages = iter(_browser_seed_pages(target))
+    first_browser_page = next(browser_pages, None)
+    if first_browser_page is not None:
+        def _iter_browser_items() -> Iterator[RawItem]:
+            yield _raw_item_from_page(first_browser_page[0], first_browser_page[1], author_id, author_name)
+            for url, html in browser_pages:
+                yield _raw_item_from_page(url, html, author_id, author_name)
+
+        return _iter_browser_items()
 
     seed_pages = _html_seed_pages(target)
     if seed_pages:
-        return [_raw_item_from_page(page.url, page.html, author_id, author_name) for page in seed_pages]
+        def _iter_html_items() -> Iterator[RawItem]:
+            for page in seed_pages:
+                yield _raw_item_from_page(page.url, page.html, author_id, author_name)
+
+        return _iter_html_items()
 
     feed_url = target["feed_url"]
     entries = filter_since(fetch_feed_entries(feed_url, auth_ctx), since)
-    items: list[RawItem] = []
-
-    for entry in entries:
-        html = fetch_text(entry.link, auth_ctx)
-        _ensure_accessible(html)
-        items.append(
-            RawItem(
+    def _iter_feed_items() -> Iterator[RawItem]:
+        for entry in entries:
+            html = fetch_text(entry.link, auth_ctx)
+            _ensure_accessible(html)
+            yield RawItem(
                 source="wechat",
                 author_id=author_id,
                 author_name=author_name,
@@ -123,5 +142,5 @@ def fetch_source(target: dict, auth_ctx: dict | None, since: datetime | None) ->
                 tags=entry.categories,
                 metadata={"feed_url": feed_url},
             )
-        )
-    return items
+
+    return _iter_feed_items()

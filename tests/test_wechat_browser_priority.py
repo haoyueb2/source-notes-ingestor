@@ -19,7 +19,7 @@ class WeChatBrowserPriorityTests(unittest.TestCase):
         with patch("obsidian_knowledge_ingestor.adapters.wechat._browser_seed_pages", return_value=[("https://mp.weixin.qq.com/s/demo", "<html><title>T</title><body>Body</body></html>")]), patch(
             "obsidian_knowledge_ingestor.adapters.wechat._html_seed_pages", side_effect=AssertionError("html seeds should not be used")
         ):
-            items = fetch_source(target, auth_ctx=None, since=None)
+            items = list(fetch_source(target, auth_ctx=None, since=None))
 
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].title, "T")

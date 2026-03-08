@@ -64,6 +64,6 @@
     "scroll_steps": 2,
     "delay_ms": 800,
     "max_items": 30,
-    "discover_from_seed": true
+    "discover_from_seed": false
   }
 }

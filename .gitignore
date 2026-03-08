@@ -42,11 +42,13 @@ state/*.db
 state/*.sqlite
 state/*.sqlite3
 state/*.jsonl
+state/resume/
 state/browser/
 state/browser-profile/
 samples/zhihu/
 samples/wechat/
 demo-vault/
+targets/wechat_damowang_resume.json
 
 # Playwright CLI
 .playwright-cli/
