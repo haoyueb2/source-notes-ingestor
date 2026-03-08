@@ -166,6 +166,28 @@ def _extract_links_from_html(html: str, base_url: str, patterns: list[re.Pattern
     return deduped
 
 
+def _zhihu_section_links(page, kind: str) -> list[str]:
+    if kind == "answers":
+        script = """() => [...new Set(
+            Array.from(document.querySelectorAll('a[href*="/question/"][href*="/answer/"]'))
+              .map(anchor => anchor.href)
+              .filter(Boolean)
+        )]"""
+    elif kind == "articles":
+        script = """() => [...new Set(
+            Array.from(document.querySelectorAll('a[href*="zhuanlan.zhihu.com/p/"]'))
+              .map(anchor => anchor.href)
+              .filter(Boolean)
+        )]"""
+    else:
+        script = """() => [...new Set(
+            Array.from(document.querySelectorAll('a[href*="/pin/"]'))
+              .map(anchor => anchor.href)
+              .filter(Boolean)
+        )]"""
+    return page.evaluate(script)
+
+
 def iter_pages_with_browser(
     urls: list[str],
     storage_state_path: str | Path,
@@ -248,16 +270,9 @@ def discover_zhihu_profile_urls(
 
     profile_url = profile_url.rstrip("/")
     sections = [
-        profile_url,
-        f"{profile_url}/answers",
-        f"{profile_url}/posts",
-        f"{profile_url}/pins",
-    ]
-    patterns = [
-        re.compile(r"zhihu\.com/question/.+/answer/"),
-        re.compile(r"zhuanlan\.zhihu\.com/p/"),
-        re.compile(r"zhihu\.com/pin/"),
-        re.compile(r"zhihu\.com/moments/"),
+        ("answers", f"{profile_url}/answers"),
+        ("articles", f"{profile_url}/posts"),
+        ("thoughts", f"{profile_url}/pins"),
     ]
 
     discovered: list[str] = []
@@ -267,21 +282,35 @@ def discover_zhihu_profile_urls(
         try:
             page = context.new_page()
             try:
-                for section in sections:
+                for kind, section in sections:
                     print(f"[browser] discover {section}", file=sys.stderr)
                     page.goto(section, wait_until="domcontentloaded", timeout=45000)
                     if "zhihu.com" in page.url and _zhihu_challenge(page):
                         raise BrowserAutomationError(f"Zhihu challenge required at {page.url}. Complete verification in the persistent browser profile, then retry.")
-                    _scroll_page(page, scroll_steps, delay_ms)
-                    html = page.content()
-                    for link in _extract_links_from_html(html, page.url, patterns):
-                        if link not in seen:
-                            seen.add(link)
-                            discovered.append(link)
-                            if len(discovered) % 10 == 0:
-                                print(f"[browser] discovered {len(discovered)} urls so far", file=sys.stderr)
-                            if len(discovered) >= max_items:
-                                return discovered
+                    prev_count = -1
+                    stable_rounds = 0
+                    section_links: list[str] = []
+                    for _ in range(max(scroll_steps, 1) * 3):
+                        section_links = _zhihu_section_links(page, kind)
+                        if len(section_links) == prev_count:
+                            stable_rounds += 1
+                        else:
+                            stable_rounds = 0
+                        if stable_rounds >= 2:
+                            break
+                        prev_count = len(section_links)
+                        page.mouse.wheel(0, 9000)
+                        page.wait_for_timeout(delay_ms)
+                    print(f"[browser] discovered {len(section_links)} {kind} urls", file=sys.stderr)
+                    for link in section_links:
+                        if link in seen:
+                            continue
+                        seen.add(link)
+                        discovered.append(link)
+                        if len(discovered) % 10 == 0:
+                            print(f"[browser] discovered {len(discovered)} urls so far", file=sys.stderr)
+                        if len(discovered) >= max_items:
+                            return discovered
             except PlaywrightTimeoutError as exc:
                 raise BrowserAutomationError(f"Timed out while scanning Zhihu profile {profile_url}") from exc
             finally:
