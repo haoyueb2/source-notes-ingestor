@@ -150,6 +150,13 @@ The agent-facing query layer assumes the official Obsidian CLI is enabled from t
 Important:
 - This project rejects the npm `obsidian-cli` package.
 - It expects the official Obsidian desktop CLI from Obsidian Settings > General > Command line interface.
+- `oki ask` now uses a stabilized two-stage orchestration:
+  1. preload the derived scope map
+  2. let local Codex generate a structured retrieval plan
+  3. execute raw-note retrieval programmatically through the official Obsidian CLI
+  4. ask Codex to synthesize a long-form answer from the raw evidence bundle
+
+This is deliberate. An earlier design relied on Codex directly deciding when to call `qa-search` and `qa-read` during `codex exec`. Live runs showed that path was not stable enough. The current design keeps Codex for deep interpretation and synthesis, while moving the actual vault retrieval loop back into deterministic program code.
 
 Examples:
 ```bash
@@ -161,6 +168,44 @@ oki qa-open-derived --scope linlin --kind overview
 oki ask "这个人最近怎么看 AI Agent" --scope linlin
 oki ask "这个人最近怎么看 AI Agent" --scope linlin --context-mode fulltext
 ```
+
+## Running the QA layer
+Recommended environment for the local Codex-backed QA flow:
+
+```bash
+cd /Users/haoyuebai/Dev/ai/obsidian-knowledge-ingestor
+source .venv/bin/activate
+export PYTHONPATH=src
+export OBSIDIAN_VAULT_PATH=/Users/haoyuebai/Documents/oki-main-vault
+export OKI_CODEX_MODEL=gpt-5.4
+export OKI_CODEX_REASONING_EFFORT=high
+export OKI_CODEX_STREAM=1
+```
+
+Build or rebuild the scope package:
+
+```bash
+python3 -m obsidian_knowledge_ingestor.cli build-qa --scope linlin --vault /Users/haoyuebai/Documents/oki-main-vault --rebuild
+```
+
+Ask in default `map` mode:
+
+```bash
+python3 -m obsidian_knowledge_ingestor.cli ask '感到无聊老想出去玩social是对的吗' --scope linlin --vault /Users/haoyuebai/Documents/oki-main-vault --context-mode map
+```
+
+Ask in higher-cost `fulltext` mode:
+
+```bash
+python3 -m obsidian_knowledge_ingestor.cli ask '感到无聊老想出去玩social是对的吗' --scope linlin --vault /Users/haoyuebai/Documents/oki-main-vault --context-mode fulltext
+```
+
+What you should expect at runtime:
+- `build-qa` streams Codex output when `OKI_CODEX_STREAM=1`, so you can watch the overview/theme generation live.
+- `oki ask` prints retrieval progress such as `[oki ask] planning retrieval` and `[oki ask] searching ...`.
+- The final long-form answer is emitted once, after the raw evidence bundle has been collected and synthesized.
+- `map` mode preloads `overview`, `themes`, and `corpus_index`, then retrieves raw notes.
+- `fulltext` mode additionally preloads a truncated `full_context` extract, so it is materially more expensive in prompt size.
 
 ## Scope config
 The QA layer works at a person-level scope and can aggregate multiple source roots for the same creator.
@@ -188,9 +233,26 @@ Example:
 
 `oki build-qa --scope ...` writes deterministic derived files plus Codex-generated scope maps under `Derived/Scopes/<scope_id>/`.
 
+The generated files are split by responsibility:
+- Program-generated deterministic files:
+  - `manifest.md`
+  - `corpus_index.md`
+  - `full_context.md`
+- Codex-generated derived maps:
+  - `overview.md`
+  - `themes.md`
+
+`overview.md` is intended to be a long-form orientation document. `themes.md` is intended to be a dense retrieval atlas rather than a short topical summary.
+
 ## Current strategy
 - Zhihu: logged-in browser automation plus API-backed ingestion and post-ingest verification.
 - WeChat: use one or more seed article URLs to derive a `profile_ext/getmsg` history feed, page through article history, then fetch article bodies with the browser session.
 - Local WeChat cache is used only to recover seed URLs with the required query parameters. It is not treated as a source of truth for history discovery.
 - WeChat ingestion writes notes incrementally and relies on `Sources/_state` to resume after verification walls or process interruptions.
 - The vault remains the only agent-facing source of truth.
+
+## QA cost notes
+- The tested serious-answer flow that asked `感到无聊老想出去玩social是对的吗` was run in `--context-mode map`, not `fulltext`.
+- One measured successful run used `35,623` tokens total across the planning stage and final synthesis stage.
+- A later stabilized rerun used the same `map` path, with planning alone at `28,930` tokens; the final synthesis stage was non-streamed, so the exact total for that rerun was not exposed by the local CLI.
+- This repository does not know how to map local Codex token usage to an exact percentage of a 5-hour quota. The local CLI exposes per-run token counts, but not the quota denominator.

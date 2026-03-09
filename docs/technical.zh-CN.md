@@ -174,7 +174,7 @@ Vault 目录结构固定为：
 - `oki ask <prompt> --scope <scope_id>`
 
 ## 问答层实现
-当前问答层不是“程序先写死检索逻辑再拼答案”，而是：
+当前问答层仍然是 agentic 的，但 live 检索执行已经不再完全放给 Codex 自己乱跑：
 1. `oki build-qa` 先为人物级 `scope` 生成派生包。
 2. 程序负责生成确定性文件：
    - `manifest.md`
@@ -183,9 +183,16 @@ Vault 目录结构固定为：
 3. 本机 `codex` 负责生成高阶归纳文件：
    - `overview.md`
    - `themes.md`
-4. `oki ask` 默认直接调用本机 `codex`。
-5. Codex 必须先读派生地图，再通过受控 helper 多轮检索原始 note。
-6. 最终回答必须给：
+4. `oki ask` 会先预加载该 `scope` 的派生地图。
+5. 本机 `codex` 先生成结构化检索计划：
+   - `question_reframing`
+   - `query_plan[]`
+6. 程序自己执行检索计划：
+   - 多轮 `search_scope(...)`
+   - 通过官方 Obsidian CLI 读取原始 note
+   - 聚合并排序证据包
+7. 本机 `codex` 再基于原始证据包生成最终长答。
+8. 最终回答必须给：
    - 完整分析过程
    - 最终回答
    - 原始 note 引用
@@ -194,6 +201,90 @@ Vault 目录结构固定为：
 - 派生包只用于导航、全局理解和检索辅助
 - 最终证据必须回到 `Sources/**` 下的原始 note
 - scope 边界由 `scopes/*.json` 显式维护，不靠自动猜测
+
+### 为什么 ask 主链路改了
+更早版本的设计，是让 `codex exec` 自己决定什么时候调用 `qa-search`、`qa-read`、`qa-open-derived`。
+
+这个思路理论上很优雅，但 live 跑下来不够稳：
+- `codex exec` 里的多轮工具调用稳定性不够
+- 官方 Obsidian CLI 由程序直接执行时更稳
+- 最终回答深度会受“Codex 当次到底有没有搜够”影响
+
+所以现在的设计是保留 agentic 的强项，把脆弱部分收回程序：
+- Codex 负责理解问题
+- Codex 负责重述问题、设计检索角度
+- Codex 负责最终严肃长答
+- Python 程序负责稳定执行 Vault 检索
+
+### 当前 ask 执行模型
+`oki ask --scope <scope_id>` 当前执行顺序是：
+1. 检查 `Derived/Scopes/<scope_id>/` 是否存在
+2. 预加载 `overview.md` 和 `themes.md`
+3. 再按模式预加载：
+   - `map` 模式加载 `corpus_index.md`
+   - `fulltext` 模式加载 `full_context.md`
+4. 让 Codex 先产出 JSON 检索计划
+5. 程序对计划做规范化，并补上从用户问题派生出的 fallback queries
+6. 程序做 scope 限定的原始 note 检索
+7. 读取最有价值的原始 note
+8. 组装有上限的 evidence bundle
+9. 再让 Codex 只基于这个 evidence bundle 输出最终 Markdown 回答
+
+### 流式输出行为
+问答层用 `OKI_CODEX_STREAM` 控制 Codex 子进程是否流式输出。
+
+当前行为是：
+- `build-qa` 默认流式输出 Codex 过程
+- `oki ask` 的“检索计划生成阶段”是流式的
+- `oki ask` 还会输出确定性的进度日志，例如：
+  - `[oki ask] planning retrieval`
+  - `[oki ask] searching <query>`
+  - `[oki ask] synthesizing final answer`
+- 最终回答阶段被故意收口成只打印一次，避免整段答案重复输出
+
+### Context mode
+`oki ask` 当前支持两种上下文模式。
+
+`map` 模式：
+- 预加载 `overview`、`themes`、`corpus_index`
+- 先建立作者地图
+- 再派生多组 query 去检索原始 note
+- 最终证据仍然来自原始 note
+
+`fulltext` 模式：
+- 预加载 `overview`、`themes`，再加一份截断过的 `full_context`
+- 让 Codex 先拥有更强的整库感
+- prompt 更大，token 成本明显更高
+
+默认仍然是 `map`，因为它更便宜，而且已经足以支撑第一批成功的严肃长答 smoke test。
+
+### 运行时参数
+当前问答层会读取：
+- `OKI_CODEX_MODEL`
+- `OKI_CODEX_REASONING_EFFORT`
+- `OKI_CODEX_STREAM`
+
+严肃使用场景推荐：
+- `OKI_CODEX_MODEL=gpt-5.4`
+- `OKI_CODEX_REASONING_EFFORT=high`
+- `OKI_CODEX_STREAM=1`
+
+### 一次真实 smoke test 的用量
+真实 Vault 上有一次成功 smoke test，问题是：
+- `感到无聊老想出去玩social是对的吗`
+
+当时的运行方式：
+- scope: `linlin`
+- context mode: `map`
+- model: `gpt-5.4`
+- reasoning effort: `high`
+
+可确认的 token 用量：
+- 一次成功 run 明确测到总共 `35,623` tokens
+- 后续稳定化后的 rerun，planning 阶段明确看到 `28,930` tokens
+- 但 final synthesis 因为是 non-stream capture，CLI 没额外暴露那一段的 token 数
+
+目前项目拿不到 Codex 5 小时滚动额度的总 denominator，所以不能把这次 run 的 token 数可靠地换算成“用了额度的百分之多少”。
 
 ## 测试覆盖
 当前自动化测试主要覆盖：

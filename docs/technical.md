@@ -167,7 +167,7 @@ Current CLI commands:
 - `oki ask <prompt> --scope <scope_id>`
 
 ## QA Layer
-The QA layer is now agentic rather than a fixed programmatic retrieval chain:
+The QA layer is agentic, but the live retrieval loop is no longer delegated blindly to Codex:
 1. `oki build-qa` builds a person-level scope package.
 2. The program generates deterministic files:
    - `manifest.md`
@@ -176,9 +176,16 @@ The QA layer is now agentic rather than a fixed programmatic retrieval chain:
 3. Local `codex` generates higher-level scope maps:
    - `overview.md`
    - `themes.md`
-4. `oki ask` launches local `codex` by default.
-5. Codex must read the derived map first, then perform multi-step retrieval against raw notes through the controlled `qa-*` helpers.
-6. Final output must include:
+4. `oki ask` preloads the derived map for the requested scope.
+5. Local `codex` first generates a structured retrieval plan:
+   - `question_reframing`
+   - `query_plan[]`
+6. The program then executes the retrieval plan itself:
+   - run multiple `search_scope(...)` calls
+   - read raw notes through the official Obsidian CLI
+   - aggregate and rank the evidence bundle
+7. Local `codex` then writes the final answer from the raw evidence bundle only.
+8. Final output must include:
    - a full analysis trace
    - the final answer
    - citations back to raw vault notes
@@ -187,6 +194,90 @@ Important boundary:
 - derived notes are navigation aids and context packs, not final evidence
 - final evidence must come from raw notes under `Sources/**`
 - cross-source scope membership is explicit in `scopes/*.json`
+
+### Why the ask flow changed
+The earlier ask design relied on `codex exec` directly deciding when to invoke `qa-search`, `qa-read`, and `qa-open-derived`.
+
+That was attractive in principle, but unstable in live use:
+- tool calling inside `codex exec` was not reliable enough for repeated multi-step retrieval
+- official Obsidian CLI invocations were more stable when executed directly by the program
+- the final answers depended too much on whether Codex happened to search enough times
+
+The current design keeps the best part of the agentic approach, namely:
+- Codex interprets the user question
+- Codex reframes the problem and proposes retrieval angles
+- Codex synthesizes the final serious answer
+
+But it moves the brittle part, namely repeated vault retrieval execution, back into deterministic Python code.
+
+### Current ask execution model
+`oki ask --scope <scope_id>` now follows this sequence:
+1. verify that `Derived/Scopes/<scope_id>/` exists
+2. preload `overview.md` and `themes.md`
+3. preload either:
+   - `corpus_index.md` in `map` mode
+   - `full_context.md` in `fulltext` mode
+4. ask Codex for a structured retrieval plan in JSON
+5. normalize and extend that plan with fallback queries derived from the user prompt
+6. run scope-limited raw-note searches programmatically
+7. read the highest-value raw notes
+8. build a bounded evidence bundle
+9. ask Codex to produce a long-form Markdown answer from that bundle
+
+### Streaming behavior
+The QA layer uses `OKI_CODEX_STREAM` to control Codex subprocess streaming.
+
+Current behavior:
+- `build-qa` streams Codex output by default
+- `oki ask` streams the retrieval-planning phase
+- `oki ask` also prints deterministic progress logs such as:
+  - `[oki ask] planning retrieval`
+  - `[oki ask] searching <query>`
+  - `[oki ask] synthesizing final answer`
+- final answer synthesis is intentionally captured and printed once at the end, so the answer is not duplicated
+
+### Context modes
+`oki ask` currently supports two context modes.
+
+`map` mode:
+- preload `overview`, `themes`, and `corpus_index`
+- use them as author-map context
+- derive multiple retrieval queries
+- fetch raw notes for final evidence
+
+`fulltext` mode:
+- preload `overview`, `themes`, and a truncated `full_context` extract
+- gives Codex a broader whole-corpus view before retrieval
+- materially increases prompt size and token cost
+
+The default remains `map` because it is cheaper and was sufficient for the first successful long-form smoke tests.
+
+### Runtime knobs
+The QA layer currently honors:
+- `OKI_CODEX_MODEL`
+- `OKI_CODEX_REASONING_EFFORT`
+- `OKI_CODEX_STREAM`
+
+Typical serious-study setup:
+- `OKI_CODEX_MODEL=gpt-5.4`
+- `OKI_CODEX_REASONING_EFFORT=high`
+- `OKI_CODEX_STREAM=1`
+
+### Measured usage from a live smoke test
+A successful live run on the real vault asked:
+- `感到无聊老想出去玩social是对的吗`
+
+Execution mode:
+- scope: `linlin`
+- context mode: `map`
+- model: `gpt-5.4`
+- reasoning effort: `high`
+
+Observed token usage:
+- one measured successful run: `35,623` total tokens
+- a later stabilized rerun exposed `28,930` planning tokens, but the final non-streamed synthesis stage did not expose its own count through the local CLI
+
+This project does not currently know the denominator for Codex's rolling 5-hour quota, so it cannot convert those run totals into a trustworthy percentage.
 
 ## Testing
 Current automated coverage focuses on:
