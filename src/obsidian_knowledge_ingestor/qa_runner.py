@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import asdict
 from functools import lru_cache
 from pathlib import Path
@@ -257,6 +258,86 @@ def _should_stream_codex_output() -> bool:
     return raw.lower() not in {"0", "false", "no"}
 
 
+def _build_codex_env(scopes_dir: str | Path | None = None) -> tuple[dict[str, str], Path]:
+    env = dict(os.environ)
+    root = project_root()
+    src_root = root / "src"
+    existing_pythonpath = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = str(src_root) if not existing_pythonpath else f"{src_root}:{existing_pythonpath}"
+    if scopes_dir:
+        env["OKI_SCOPES_DIR"] = str(Path(scopes_dir).expanduser())
+    return env, root
+
+
+def _run_codex_json(
+    prompt: str,
+    schema: dict[str, object],
+    extra_dirs: list[Path],
+    scopes_dir: str | Path | None = None,
+    stream_output: bool | None = None,
+) -> dict[str, object]:
+    binary = _codex_binary()
+    env, root = _build_codex_env(scopes_dir=scopes_dir)
+    if stream_output is None:
+        stream_output = _should_stream_codex_output()
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_root = Path(tmp_dir)
+        schema_path = tmp_root / "schema.json"
+        output_path = tmp_root / "response.json"
+        schema_path.write_text(json.dumps(schema, ensure_ascii=False, indent=2), encoding="utf-8")
+        result = subprocess.run(
+            _codex_exec_prefix(binary, root, extra_dirs)
+            + [
+                "--output-schema",
+                str(schema_path),
+                "--output-last-message",
+                str(output_path),
+                "-",
+            ],
+            cwd=root,
+            env=env,
+            input=prompt,
+            capture_output=not stream_output,
+            text=True,
+        )
+        if result.returncode != 0:
+            message = ""
+            if not stream_output:
+                message = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(message or "codex exec failed while generating structured retrieval output.")
+        return json.loads(output_path.read_text(encoding="utf-8"))
+
+
+def _run_codex_markdown(
+    prompt: str,
+    extra_dirs: list[Path],
+    scopes_dir: str | Path | None = None,
+    stream_output: bool | None = None,
+) -> str:
+    binary = _codex_binary()
+    env, root = _build_codex_env(scopes_dir=scopes_dir)
+    if stream_output is None:
+        stream_output = _should_stream_codex_output()
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        output_path = Path(tmp_dir) / "codex-last-message.md"
+        cmd = _codex_exec_prefix(binary, root, extra_dirs)
+        cmd.extend(["--output-last-message", str(output_path), "-"])
+        result = subprocess.run(
+            cmd,
+            cwd=root,
+            env=env,
+            input=prompt,
+            capture_output=not stream_output,
+            text=True,
+        )
+        if result.returncode != 0:
+            message = ""
+            if not stream_output:
+                message = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(message or "codex exec failed while synthesizing the scope answer.")
+        return output_path.read_text(encoding="utf-8")
+
+
 def _helper_prefix() -> str:
     root = project_root()
     return f'PYTHONPATH="{root / "src"}" "{sys.executable}" -m obsidian_knowledge_ingestor.cli'
@@ -279,6 +360,249 @@ def _truncate_for_prompt(text: str, max_chars: int) -> str:
     if len(stripped) <= max_chars:
         return stripped
     return stripped[:max_chars].rstrip() + "\n\n[Truncated for prompt length]"
+
+
+def _fallback_queries(prompt: str) -> list[str]:
+    normalized = prompt.strip()
+    queries: list[str] = []
+    if normalized:
+        queries.append(normalized)
+    chunks = re.findall(r"[A-Za-z]{2,}|[\u4e00-\u9fff]{2,8}", normalized)
+    for chunk in chunks:
+        if chunk not in queries:
+            queries.append(chunk)
+    return queries[:6]
+
+
+def _normalize_query_plan(payload: dict[str, object], prompt: str) -> tuple[str, list[dict[str, str]]]:
+    reframing = str(payload.get("question_reframing") or prompt).strip()
+    raw_plan = payload.get("query_plan")
+    queries: list[dict[str, str]] = []
+    seen: set[str] = set()
+    if isinstance(raw_plan, list):
+        for item in raw_plan:
+            if not isinstance(item, dict):
+                continue
+            query = str(item.get("query") or "").strip()
+            if not query or query in seen:
+                continue
+            seen.add(query)
+            queries.append(
+                {
+                    "query": query,
+                    "bucket": str(item.get("bucket") or "unspecified").strip() or "unspecified",
+                    "why": str(item.get("why") or "").strip(),
+                }
+            )
+    for query in _fallback_queries(prompt):
+        if query in seen:
+            continue
+        seen.add(query)
+        queries.append({"query": query, "bucket": "fallback", "why": "Fallback query derived from the user prompt."})
+        if len(queries) >= 8:
+            break
+    return reframing, queries[:8]
+
+
+def _build_retrieval_plan_prompt(
+    prompt: str,
+    scope_id: str,
+    context_mode: str,
+    preloaded_context: dict[str, str],
+) -> str:
+    lines = [
+        f'You are planning retrieval for a serious scope-grounded question about "{scope_id}".',
+        "Your job is not to answer yet.",
+        "Your job is to produce a high-quality retrieval plan that helps a downstream program gather the right raw notes.",
+        "Return JSON only.",
+        "",
+        "Planning requirements:",
+        "- Write query strings that are short, retrieval-friendly, and semantically sharp.",
+        "- Cover surface wording, hidden motives, evaluative criteria, and counterpoints.",
+        "- Prefer 6-8 queries unless the material is unusually narrow.",
+        "- Keep queries diverse. Do not repeat near-duplicates.",
+        "- Write in Chinese when appropriate to the source material.",
+        "",
+        "JSON contract:",
+        '- `question_reframing`: a concise but deep reframing of the user question.',
+        '- `query_plan`: array of objects with `query`, `bucket`, and `why`.',
+        "",
+        f"Context mode: {context_mode}",
+        "Use the derived context below as navigation only.",
+    ]
+    for kind, body in preloaded_context.items():
+        lines.extend(["", f"### BEGIN {kind.upper()}", body, f"### END {kind.upper()}"])
+    lines.extend(["", "User question:", prompt.strip()])
+    return "\n".join(lines)
+
+
+def _progress(message: str) -> None:
+    print(f"[oki ask] {message}", file=sys.stderr)
+
+
+def _search_scope_with_retry(
+    scope_id: str,
+    query: str,
+    vault_path: Path,
+    scopes_dir: str | Path | None,
+    limit: int,
+    retries: int = 2,
+) -> list[EvidenceItem]:
+    last_error: RuntimeError | None = None
+    for attempt in range(retries + 1):
+        try:
+            return search_scope(scope_id, query, vault_path, scopes_dir=scopes_dir, limit=limit)
+        except RuntimeError as exc:
+            last_error = exc
+            if attempt >= retries:
+                break
+            time.sleep(0.2 * (attempt + 1))
+    raise last_error or RuntimeError(f"Search failed for scope {scope_id!r}.")
+
+
+def _collect_preloaded_context(scope_id: str, vault_root: Path, context_mode: str) -> dict[str, str]:
+    preloaded_context = {
+        "overview": _truncate_for_prompt(_read_derived_note_body("overview", scope_id, vault_root), 32000),
+        "themes": _truncate_for_prompt(_read_derived_note_body("themes", scope_id, vault_root), 40000),
+    }
+    if context_mode == "fulltext":
+        preloaded_context["full_context"] = _truncate_for_prompt(_read_derived_note_body("full_context", scope_id, vault_root), 70000)
+    else:
+        preloaded_context["corpus_index"] = _truncate_for_prompt(_read_derived_note_body("corpus_index", scope_id, vault_root), 24000)
+    return preloaded_context
+
+
+def _collect_evidence_bundle(
+    scope_id: str,
+    queries: list[dict[str, str]],
+    vault_root: Path,
+    scopes_dir: str | Path | None,
+    per_query_limit: int = 6,
+    final_note_limit: int = 8,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    aggregate: dict[str, dict[str, object]] = {}
+    query_runs: list[dict[str, object]] = []
+    for item in queries:
+        query = item["query"]
+        _progress(f"searching `{query}`")
+        results = _search_scope_with_retry(scope_id, query, vault_root, scopes_dir=scopes_dir, limit=per_query_limit)
+        query_runs.append(
+            {
+                "query": query,
+                "bucket": item.get("bucket", ""),
+                "why": item.get("why", ""),
+                "match_count": len(results),
+                "paths": [result.path for result in results],
+            }
+        )
+        for result in results:
+            existing = aggregate.get(result.path)
+            if existing is None:
+                aggregate[result.path] = {
+                    "item": result,
+                    "total_score": result.score,
+                    "queries": [query],
+                    "snippets": [result.snippet] if result.snippet else [],
+                }
+                continue
+            existing["total_score"] = float(existing["total_score"]) + result.score
+            if query not in existing["queries"]:
+                existing["queries"].append(query)
+            if result.snippet and result.snippet not in existing["snippets"]:
+                existing["snippets"].append(result.snippet)
+
+    if not aggregate:
+        raise RuntimeError(f"No raw evidence found for scope {scope_id!r}.")
+
+    ordered = sorted(
+        aggregate.values(),
+        key=lambda entry: (-len(entry["queries"]), -float(entry["total_score"]), entry["item"].path),
+    )
+
+    bundle: list[dict[str, object]] = []
+    for entry in ordered[:final_note_limit]:
+        evidence_item = entry["item"]
+        note_result = read_note(evidence_item.path, cwd=vault_root)
+        if note_result.returncode != 0:
+            continue
+        bundle.append(
+            {
+                "path": evidence_item.path,
+                "title": evidence_item.title,
+                "source": evidence_item.source,
+                "content_type": evidence_item.content_type,
+                "queries": entry["queries"],
+                "snippets": entry["snippets"][:3],
+                "body_excerpt": _truncate_for_prompt(_strip_frontmatter(note_result.stdout), 2200),
+            }
+        )
+    if not bundle:
+        raise RuntimeError(f"Unable to read raw evidence notes for scope {scope_id!r}.")
+    return query_runs, bundle
+
+
+def _build_synthesis_prompt(
+    user_prompt: str,
+    scope_id: str,
+    question_reframing: str,
+    query_runs: list[dict[str, object]],
+    evidence_bundle: list[dict[str, object]],
+) -> str:
+    lines = [
+        f'You are answering a serious, source-grounded question for the scope "{scope_id}".',
+        "You are no longer planning retrieval. The program has already gathered raw evidence for you.",
+        "You must answer only from the raw evidence bundle below.",
+        "Do not invent positions that are not supported by the cited raw notes.",
+        "",
+        "Answer requirements:",
+        "- Write in Chinese.",
+        "- Optimize for depth, structure, and serious thinking, not brevity.",
+        "- Push beyond surface advice into motives, criteria, tensions, tradeoffs, and long-term implications.",
+        "- Aim for roughly 1500-2800 Chinese characters when the evidence supports it.",
+        "- Keep the voice analytical rather than theatrical.",
+        "",
+        "Output contract:",
+        "- Output in Markdown with these sections exactly:",
+        "  1. ## Analysis Trace",
+        "  2. ## Answer",
+        "  3. ## Citations",
+        "- In ## Analysis Trace include:",
+        "  - question reframing",
+        "  - retrieval summary",
+        "  - evidence synthesis",
+        "  - tensions, ambiguities, or limits",
+        "- In ## Citations list raw note paths only.",
+        "",
+        "User question:",
+        user_prompt.strip(),
+        "",
+        "Question reframing:",
+        question_reframing,
+        "",
+        "Retrieval summary:",
+    ]
+    for run in query_runs:
+        lines.append(
+            f"- query `{run['query']}` ({run['bucket']}): {run['match_count']} matches"
+        )
+    lines.extend(["", "Raw evidence bundle:"])
+    for idx, record in enumerate(evidence_bundle, start=1):
+        lines.extend(
+            [
+                "",
+                f"### Evidence {idx:02d}",
+                f"- Path: `{record['path']}`",
+                f"- Title: {record['title']}",
+                f"- Source: {record['source']}",
+                f"- Type: {record['content_type']}",
+                f"- Hit queries: {', '.join(record['queries'])}",
+                "- Key snippets:",
+            ]
+        )
+        for snippet in record["snippets"]:
+            lines.append(f"  - {snippet}")
+        lines.extend(["- Body excerpt:", record["body_excerpt"]])
+    return "\n".join(lines)
 
 
 def _build_agent_prompt(
@@ -398,49 +722,44 @@ def ask_scope(
         answer = _build_agent_prompt(prompt, scope_id, context_mode=context_mode, vault_path=vault_root)
         return AskResultBundle(prompt=prompt, scope_id=scope_id, context_mode=context_mode, agent=agent, answer_markdown=answer)
 
-    binary = _codex_binary()
-    preloaded_context = {
-        "overview": _truncate_for_prompt(_read_derived_note_body("overview", scope_id, vault_root), 32000),
-        "themes": _truncate_for_prompt(_read_derived_note_body("themes", scope_id, vault_root), 40000),
-    }
-    if context_mode == "fulltext":
-        preloaded_context["full_context"] = _truncate_for_prompt(_read_derived_note_body("full_context", scope_id, vault_root), 70000)
-    else:
-        preloaded_context["corpus_index"] = _truncate_for_prompt(_read_derived_note_body("corpus_index", scope_id, vault_root), 24000)
-    prompt_text = _build_agent_prompt(
-        prompt,
-        scope_id,
-        context_mode=context_mode,
-        vault_path=vault_root,
-        preloaded_context=preloaded_context,
+    preloaded_context = _collect_preloaded_context(scope_id, vault_root, context_mode=context_mode)
+    _progress("planning retrieval")
+    plan_payload = _run_codex_json(
+        _build_retrieval_plan_prompt(prompt, scope_id, context_mode=context_mode, preloaded_context=preloaded_context),
+        schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["question_reframing", "query_plan"],
+            "properties": {
+                "question_reframing": {"type": "string"},
+                "query_plan": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["query", "bucket", "why"],
+                        "properties": {
+                            "query": {"type": "string"},
+                            "bucket": {"type": "string"},
+                            "why": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        },
+        extra_dirs=[vault_root],
+        scopes_dir=scopes_dir,
+        stream_output=True,
     )
-    env = dict(os.environ)
-    root = project_root()
-    src_root = root / "src"
-    existing_pythonpath = env.get("PYTHONPATH")
-    env["PYTHONPATH"] = str(src_root) if not existing_pythonpath else f"{src_root}:{existing_pythonpath}"
-    if scopes_dir:
-        env["OKI_SCOPES_DIR"] = str(Path(scopes_dir).expanduser())
-    stream_output = _should_stream_codex_output()
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        output_path = Path(tmp_dir) / "codex-last-message.md"
-        cmd = _codex_exec_prefix(binary, root, [vault_root])
-        cmd.extend(["--output-last-message", str(output_path), "-"])
-        result = subprocess.run(
-            cmd,
-            cwd=root,
-            env=env,
-            input=prompt_text,
-            capture_output=not stream_output,
-            text=True,
-        )
-        if result.returncode != 0:
-            message = ""
-            if not stream_output:
-                message = (result.stderr or result.stdout or "").strip()
-            raise RuntimeError(message or "codex exec failed while answering the scope question.")
-        answer = output_path.read_text(encoding="utf-8")
+    question_reframing, query_plan = _normalize_query_plan(plan_payload, prompt)
+    query_runs, evidence_bundle = _collect_evidence_bundle(scope_id, query_plan, vault_root, scopes_dir=scopes_dir)
+    _progress("synthesizing final answer")
+    answer = _run_codex_markdown(
+        _build_synthesis_prompt(prompt, scope_id, question_reframing, query_runs, evidence_bundle),
+        extra_dirs=[vault_root],
+        scopes_dir=scopes_dir,
+        stream_output=False,
+    )
     return AskResultBundle(prompt=prompt, scope_id=scope_id, context_mode=context_mode, agent=agent, answer_markdown=answer)
 
 
