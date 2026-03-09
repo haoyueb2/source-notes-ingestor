@@ -25,6 +25,56 @@ class CodexCliUnavailableError(RuntimeError):
     pass
 
 
+PROMPT_CONCEPT_KEYWORDS = [
+    "失败",
+    "内耗",
+    "焦虑",
+    "机会",
+    "错过",
+    "聪明人",
+    "回国",
+    "美国",
+    "硅谷",
+    "工作",
+    "职业",
+    "路线",
+    "代价",
+    "自由",
+    "认同",
+    "外界认同",
+    "成长",
+    "努力",
+    "节奏",
+    "独处",
+    "孤独",
+    "时间",
+    "快乐",
+    "人生",
+    "意义",
+    "命运",
+]
+
+QUERY_STOPWORDS = {
+    "一路走来",
+    "很多",
+    "最大",
+    "一次",
+    "感觉",
+    "觉得",
+    "就是",
+    "然后",
+    "但是",
+    "因为",
+    "所以",
+    "还是",
+    "如何",
+    "怎么办",
+    "什么",
+    "这个",
+    "那个",
+}
+
+
 def _target_vault_context(vault: str | None, cwd: str | Path | None = None) -> tuple[str | None, str | Path | None]:
     if not vault:
         return None, cwd
@@ -362,16 +412,56 @@ def _truncate_for_prompt(text: str, max_chars: int) -> str:
     return stripped[:max_chars].rstrip() + "\n\n[Truncated for prompt length]"
 
 
+def _add_query_candidate(candidates: list[str], seen: set[str], value: str) -> None:
+    query = value.strip()
+    if not query or query in seen:
+        return
+    seen.add(query)
+    candidates.append(query)
+
+
+def _split_query_terms(query: str) -> list[str]:
+    pieces = re.split(r"[\s,，、/|;；]+", query.strip())
+    terms: list[str] = []
+    seen: set[str] = set()
+    for piece in pieces:
+        token = piece.strip()
+        if len(token) < 2 or token in QUERY_STOPWORDS or token in seen:
+            continue
+        seen.add(token)
+        terms.append(token)
+    return terms
+
+
+def _prompt_keyword_queries(prompt: str) -> list[str]:
+    normalized = prompt.strip()
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for keyword in PROMPT_CONCEPT_KEYWORDS:
+        if keyword in normalized:
+            _add_query_candidate(candidates, seen, keyword)
+
+    for english in re.findall(r"[A-Za-z][A-Za-z0-9.+-]{1,}", normalized):
+        _add_query_candidate(candidates, seen, english)
+
+    clauses = [part.strip() for part in re.split(r"[，。,．；;：:\n!?！？（）()“”\"'、]+", normalized) if part.strip()]
+    for clause in clauses:
+        if 2 <= len(clause) <= 12 and clause not in QUERY_STOPWORDS:
+            _add_query_candidate(candidates, seen, clause)
+        for token in _split_query_terms(clause):
+            _add_query_candidate(candidates, seen, token)
+    return candidates[:16]
+
+
 def _fallback_queries(prompt: str) -> list[str]:
     normalized = prompt.strip()
     queries: list[str] = []
+    seen: set[str] = set()
     if normalized:
-        queries.append(normalized)
-    chunks = re.findall(r"[A-Za-z]{2,}|[\u4e00-\u9fff]{2,8}", normalized)
-    for chunk in chunks:
-        if chunk not in queries:
-            queries.append(chunk)
-    return queries[:6]
+        _add_query_candidate(queries, seen, normalized)
+    for keyword in _prompt_keyword_queries(normalized):
+        _add_query_candidate(queries, seen, keyword)
+    return queries[:12]
 
 
 def _normalize_query_plan(payload: dict[str, object], prompt: str) -> tuple[str, list[dict[str, str]]]:
@@ -394,14 +484,25 @@ def _normalize_query_plan(payload: dict[str, object], prompt: str) -> tuple[str,
                     "why": str(item.get("why") or "").strip(),
                 }
             )
+            for token in _split_query_terms(query):
+                if token in seen:
+                    continue
+                seen.add(token)
+                queries.append(
+                    {
+                        "query": token,
+                        "bucket": f"{str(item.get('bucket') or 'unspecified').strip() or 'unspecified'}-term",
+                        "why": f"Short-form fallback term derived from planned query: {query}",
+                    }
+                )
     for query in _fallback_queries(prompt):
         if query in seen:
             continue
         seen.add(query)
         queries.append({"query": query, "bucket": "fallback", "why": "Fallback query derived from the user prompt."})
-        if len(queries) >= 8:
+        if len(queries) >= 14:
             break
-    return reframing, queries[:8]
+    return reframing, queries[:14]
 
 
 def _build_retrieval_plan_prompt(

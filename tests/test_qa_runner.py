@@ -9,6 +9,7 @@ from obsidian_knowledge_ingestor.qa_runner import (
     ObsidianCliUnavailableError,
     _build_agent_prompt,
     _extract_paths_from_search_stdout,
+    _fallback_queries,
     _normalize_query_plan,
     _obsidian_binary,
     ask_scope,
@@ -100,6 +101,32 @@ This line discusses deep thought and reflective practice.
         self.assertEqual(reframing, "重写问题")
         self.assertGreaterEqual(len(queries), 1)
         self.assertEqual(queries[0]["query"], "感到无聊老想出去玩social是对的吗")
+
+    def test_normalize_query_plan_expands_multi_term_queries(self) -> None:
+        _, queries = _normalize_query_plan(
+            {
+                "question_reframing": "问题重写",
+                "query_plan": [
+                    {"query": "失败 机会 内耗", "bucket": "surface", "why": "组合查询"},
+                ],
+            },
+            "我因为失败而内耗，担心错过机会",
+        )
+        values = [item["query"] for item in queries]
+        self.assertIn("失败 机会 内耗", values)
+        self.assertIn("失败", values)
+        self.assertIn("机会", values)
+        self.assertIn("内耗", values)
+
+    def test_fallback_queries_extracts_prompt_keywords(self) -> None:
+        values = _fallback_queries(
+            "一路走来，我有很多失败，回国后还是觉得去硅谷才有最多的机会，如何排解这种内耗呢"
+        )
+        self.assertIn("失败", values)
+        self.assertIn("回国", values)
+        self.assertIn("硅谷", values)
+        self.assertIn("机会", values)
+        self.assertIn("内耗", values)
 
     def test_ask_scope_plans_retrieval_then_synthesizes_from_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
