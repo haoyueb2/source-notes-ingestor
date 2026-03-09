@@ -17,7 +17,7 @@ A local-first ingestion pipeline for collecting Zhihu and WeChat content, normal
 - WeChat verification-aware resume, so `oki ingest wechat` can recompute remaining URLs from state and retry after a verification wall
 - HTML-to-Markdown normalization into a canonical note model
 - Obsidian vault writer with frontmatter, raw HTML archival, asset download, and sync state tracking
-- Obsidian CLI query wrapper for `search`, `read`, and `ask`
+- Scope-based QA package builder plus agentic vault Q&A via Codex + official Obsidian CLI
 - Unit tests for normalization, note writing, incremental skip behavior, WeChat verification-wall detection, and browser URL discovery
 
 ## What is not implemented yet
@@ -50,6 +50,7 @@ python3 -m playwright install chromium
 - `docs/plan.md`: staged delivery plan
 - `samples/*.example.json`: target config examples
 - `tests/`: unit tests
+- `scopes/`: person-level scope definitions for the QA layer
 
 ## Fixed interfaces
 These logical interfaces remain the contract for future work:
@@ -139,18 +140,53 @@ WeChat target example:
 - `Sources/Zhihu/<author>/thoughts/*.md`
 - `Sources/Zhihu/<author>/articles/*.md`
 - `Sources/WeChat/<account>/*.md`
+- `Derived/Scopes/<scope_id>/*.md`
 - `Sources/_assets/...`
 - `Sources/_state/...`
 
 ## Querying with Obsidian CLI
-The query layer assumes the official Obsidian CLI is enabled from the desktop app and exposed in `PATH`.
+The agent-facing query layer assumes the official Obsidian CLI is enabled from the desktop app and exposed in `PATH`.
+
+Important:
+- This project rejects the npm `obsidian-cli` package.
+- It expects the official Obsidian desktop CLI from Obsidian Settings > General > Command line interface.
 
 Examples:
 ```bash
 oki search "deepseek"
 oki read "Sources/Zhihu/example-author/answers/123-some-title.md"
-oki ask "这个人最近怎么看 AI Agent" --scope "Example Author"
+oki build-qa --scope linlin
+oki qa-search --scope linlin --query "成长 自律"
+oki qa-open-derived --scope linlin --kind overview
+oki ask "这个人最近怎么看 AI Agent" --scope linlin
+oki ask "这个人最近怎么看 AI Agent" --scope linlin --context-mode fulltext
 ```
+
+## Scope config
+The QA layer works at a person-level scope and can aggregate multiple source roots for the same creator.
+
+Example:
+```json
+{
+  "scope_id": "linlin",
+  "display_name": "林琳",
+  "sources": [
+    {
+      "path": "Sources/Zhihu/lin-lin-98-23",
+      "source": "zhihu",
+      "author_id": "lin-lin-98-23",
+      "author_name": "lin-lin-98-23"
+    },
+    {
+      "path": "Sources/WeChat/大魔王的后花园",
+      "source": "wechat",
+      "account_name": "大魔王的后花园"
+    }
+  ]
+}
+```
+
+`oki build-qa --scope ...` writes deterministic derived files plus Codex-generated scope maps under `Derived/Scopes/<scope_id>/`.
 
 ## Current strategy
 - Zhihu: logged-in browser automation plus API-backed ingestion and post-ingest verification.

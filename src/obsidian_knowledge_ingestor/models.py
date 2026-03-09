@@ -48,3 +48,53 @@ class QueryResult:
     stdout: str
     stderr: str
     returncode: int
+
+
+@dataclass(slots=True)
+class ScopeSource:
+    path: str
+    source: str | None = None
+    author_name: str | None = None
+    author_id: str | None = None
+    account_name: str | None = None
+    description: str | None = None
+
+
+@dataclass(slots=True)
+class ScopeConfig:
+    scope_id: str
+    display_name: str
+    sources: list[ScopeSource]
+    description: str | None = None
+
+
+@dataclass(slots=True)
+class DerivedScopeManifest:
+    scope_id: str
+    display_name: str
+    derived_dir: str
+    source_roots: list[str]
+    source_note_paths: list[str]
+    generated_files: dict[str, str]
+    note_count: int
+    source_counts: dict[str, int]
+
+
+@dataclass(slots=True)
+class EvidenceItem:
+    path: str
+    title: str
+    source: str
+    content_type: str
+    snippet: str
+    score: float
+    source_kind: str = "raw"
+
+
+@dataclass(slots=True)
+class AskResultBundle:
+    prompt: str
+    scope_id: str
+    context_mode: str
+    agent: str
+    answer_markdown: str

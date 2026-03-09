@@ -1,0 +1,18 @@
+{
+  "scope_id": "linlin",
+  "display_name": "林琳",
+  "description": "Aggregate scope for the same creator across Zhihu and WeChat vault sources.",
+  "sources": [
+    {
+      "path": "Sources/Zhihu/lin-lin-98-23",
+      "source": "zhihu",
+      "author_id": "lin-lin-98-23",
+      "author_name": "lin-lin-98-23"
+    },
+    {
+      "path": "Sources/WeChat/大魔王的后花园",
+      "source": "wechat",
+      "account_name": "大魔王的后花园"
+    }
+  ]
+}

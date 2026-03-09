@@ -16,6 +16,7 @@ The project is intentionally practical. It favors stable boundaries and observab
 - HTML parsing and normalization: BeautifulSoup plus in-repo HTML utilities
 - Storage model: Markdown notes plus YAML frontmatter in an Obsidian vault
 - State tracking: JSON state files under `Sources/_state`
+- QA execution: local `codex` plus the official Obsidian CLI plus scope-derived packs
 
 ## Repository Structure
 - `src/obsidian_knowledge_ingestor/`
@@ -28,8 +29,11 @@ The project is intentionally practical. It favors stable boundaries and observab
   - `vault_writer.py`: note materialization, assets, and sync state
   - `pipeline.py`: end-to-end ingestion orchestration
   - `qa_runner.py`: official Obsidian CLI wrapper
+  - `qa_builder.py`: scope-derived QA pack generation
+  - `scope_loader.py`: person-level scope loading
   - `verification.py`: source-vs-vault verification logic
 - `docs/`: architecture, plan, and technical docs
+- `scopes/`: person-level scope definitions
 - `samples/`: example target files
 - `targets/`: local real-world target configs
 - `tests/`: unit tests
@@ -43,6 +47,8 @@ Zhihu / WeChat
   -> CanonicalNote
   -> write_note()
   -> Obsidian Vault
+  -> build-qa(scope)
+  -> Derived/Scopes/<scope_id>/*.md
   -> query_vault()
 ```
 
@@ -136,6 +142,7 @@ Vault layout:
 - `Sources/Zhihu/<author>/thoughts/*.md`
 - `Sources/Zhihu/<author>/articles/*.md`
 - `Sources/WeChat/<account>/*.md`
+- `Derived/Scopes/<scope_id>/*.md`
 - `Sources/_assets/...`
 - `Sources/_state/...`
 
@@ -153,7 +160,33 @@ Current CLI commands:
 - `oki verify zhihu --target <file> --vault <path>`
 - `oki search <query>`
 - `oki read <note-path>`
-- `oki ask <prompt>`
+- `oki build-qa --scope <scope_id>`
+- `oki qa-search --scope <scope_id> --query <text>`
+- `oki qa-read --path <note-path>`
+- `oki qa-open-derived --scope <scope_id> --kind <kind>`
+- `oki ask <prompt> --scope <scope_id>`
+
+## QA Layer
+The QA layer is now agentic rather than a fixed programmatic retrieval chain:
+1. `oki build-qa` builds a person-level scope package.
+2. The program generates deterministic files:
+   - `manifest.md`
+   - `corpus_index.md`
+   - `full_context.md`
+3. Local `codex` generates higher-level scope maps:
+   - `overview.md`
+   - `themes.md`
+4. `oki ask` launches local `codex` by default.
+5. Codex must read the derived map first, then perform multi-step retrieval against raw notes through the controlled `qa-*` helpers.
+6. Final output must include:
+   - a full analysis trace
+   - the final answer
+   - citations back to raw vault notes
+
+Important boundary:
+- derived notes are navigation aids and context packs, not final evidence
+- final evidence must come from raw notes under `Sources/**`
+- cross-source scope membership is explicit in `scopes/*.json`
 
 ## Testing
 Current automated coverage focuses on:

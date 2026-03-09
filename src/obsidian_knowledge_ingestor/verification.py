@@ -8,8 +8,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
 
-from playwright.sync_api import sync_playwright
-
 from .utils import ensure_dir
 
 
@@ -116,6 +114,11 @@ def _browser_fetch_json(page, path: str) -> dict | None:
 
 
 def _scrape_counts(profile_url: str, user_data_dir: str | Path) -> tuple[dict[str, int], dict[str, int]]:
+    try:
+        from playwright.sync_api import sync_playwright
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("playwright is required for zhihu verification. Install the browser extra first.") from exc
+
     temp_profile = _copy_profile(user_data_dir)
     try:
         with sync_playwright() as p:

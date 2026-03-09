@@ -10,10 +10,19 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .browser_automation import BrowserAutomationError, default_storage_state_path, default_user_data_dir, save_login_session
+from .qa_builder import CodexUnavailableError, build_scope_package
 from .config import AppConfig, load_target
 from .pipeline import IngestReport, ingest_source
-from .verification import verify_zhihu_ingestion
-from .qa_runner import ObsidianCliUnavailableError, query_vault, read_note, search
+from .qa_runner import (
+    CodexCliUnavailableError,
+    ObsidianCliUnavailableError,
+    ask_scope,
+    ask_scope_as_json,
+    open_derived_note,
+    read_note,
+    search,
+    search_scope,
+)
 from .wechat_discovery import WeChatDiscoveryError, discover_wechat_history
 from .utils import dump_json, load_json, slugify
 from .adapters.wechat import content_id_from_url
@@ -29,6 +38,15 @@ WECHAT_VERIFICATION_MARKERS = (
     "Complete the human verification",
 )
 WECHAT_DISABLE_RETRY_ENV = "OKI_WECHAT_DISABLE_RETRY"
+
+
+def _strip_frontmatter(text: str) -> str:
+    if not text.startswith("---\n"):
+        return text
+    parts = text.split("---\n", 2)
+    if len(parts) < 3:
+        return text
+    return parts[2]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -65,10 +83,36 @@ def build_parser() -> argparse.ArgumentParser:
     read_parser = subparsers.add_parser("read", help="Read a vault note via official CLI")
     read_parser.add_argument("path")
     read_parser.add_argument("--vault")
+    read_parser.add_argument("--body-only", action="store_true")
 
-    ask_parser = subparsers.add_parser("ask", help="Run search plus read against the vault")
+    build_qa_parser = subparsers.add_parser("build-qa", help="Build a derived QA package for a scope")
+    build_qa_parser.add_argument("--scope", required=True)
+    build_qa_parser.add_argument("--vault")
+    build_qa_parser.add_argument("--rebuild", action="store_true")
+
+    qa_search_parser = subparsers.add_parser("qa-search", help="Search raw scope notes through the official Obsidian CLI")
+    qa_search_parser.add_argument("--scope", required=True)
+    qa_search_parser.add_argument("--query", required=True)
+    qa_search_parser.add_argument("--vault")
+    qa_search_parser.add_argument("--limit", type=int, default=8)
+
+    qa_read_parser = subparsers.add_parser("qa-read", help="Read a note path through the official Obsidian CLI")
+    qa_read_parser.add_argument("--path", required=True)
+    qa_read_parser.add_argument("--vault")
+    qa_read_parser.add_argument("--body-only", action="store_true")
+
+    qa_open_parser = subparsers.add_parser("qa-open-derived", help="Read a derived scope note through the official Obsidian CLI")
+    qa_open_parser.add_argument("--scope", required=True)
+    qa_open_parser.add_argument("--kind", required=True, choices=["overview", "themes", "corpus_index", "full_context", "manifest"])
+    qa_open_parser.add_argument("--vault")
+    qa_open_parser.add_argument("--body-only", action="store_true")
+
+    ask_parser = subparsers.add_parser("ask", help="Run agentic Q&A against a scope")
     ask_parser.add_argument("prompt")
-    ask_parser.add_argument("--scope")
+    ask_parser.add_argument("--scope", required=True)
+    ask_parser.add_argument("--context-mode", choices=["map", "fulltext"], default="map")
+    ask_parser.add_argument("--agent", choices=["codex", "none"], default="codex")
+    ask_parser.add_argument("--json", action="store_true")
     ask_parser.add_argument("--vault")
 
     return parser
@@ -179,6 +223,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "verify":
+        from .verification import verify_zhihu_ingestion
+
         target = load_target(args.target)
         author_id = target.get('author_id') or target.get('author_name')
         profile_url = target.get('profile_url') or target.get('author_url') or f"https://www.zhihu.com/people/{author_id}"
@@ -234,6 +280,15 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(asdict(report), ensure_ascii=False, indent=2))
         return 0
 
+    if args.command == "build-qa":
+        try:
+            manifest = build_scope_package(args.scope, config.vault_path, rebuild=args.rebuild)
+        except (RuntimeError, CodexUnavailableError, FileNotFoundError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(json.dumps(asdict(manifest), ensure_ascii=False, indent=2))
+        return 0
+
     try:
         if args.command == "search":
             result = search(args.query, vault=args.vault, cwd=config.vault_path)
@@ -241,18 +296,50 @@ def main(argv: list[str] | None = None) -> int:
             return result.returncode
         if args.command == "read":
             result = read_note(args.path, vault=args.vault, cwd=config.vault_path)
-            print(result.stdout, end="")
+            print(_strip_frontmatter(result.stdout) if args.body_only else result.stdout, end="")
+            return result.returncode
+        if args.command == "qa-search":
+            result = search_scope(args.scope, args.query, config.vault_path, limit=args.limit)
+            print(json.dumps([asdict(item) for item in result], ensure_ascii=False, indent=2))
+            return 0
+        if args.command == "qa-read":
+            result = read_note(args.path, vault=args.vault, cwd=config.vault_path)
+            if result.stdout:
+                print(_strip_frontmatter(result.stdout) if args.body_only else result.stdout, end="")
+            if result.stderr:
+                print(result.stderr, file=sys.stderr, end="")
+            return result.returncode
+        if args.command == "qa-open-derived":
+            result = open_derived_note(args.kind, args.scope, config.vault_path)
+            if result.stdout:
+                print(_strip_frontmatter(result.stdout) if args.body_only else result.stdout, end="")
+            if result.stderr:
+                print(result.stderr, file=sys.stderr, end="")
             return result.returncode
         if args.command == "ask":
-            for result in query_vault(args.prompt, scope=args.scope, vault=args.vault, cwd=config.vault_path):
-                if result.stdout:
-                    print(result.stdout, end="")
-                if result.stderr:
-                    print(result.stderr, file=sys.stderr, end="")
-                if result.returncode != 0:
-                    return result.returncode
+            if args.agent == "none":
+                payload = ask_scope_as_json(
+                    args.prompt,
+                    args.scope,
+                    config.vault_path,
+                    context_mode=args.context_mode,
+                    agent=args.agent,
+                )
+                print(payload)
+                return 0
+            bundle = ask_scope(
+                args.prompt,
+                args.scope,
+                config.vault_path,
+                context_mode=args.context_mode,
+                agent=args.agent,
+            )
+            if args.json:
+                print(json.dumps(asdict(bundle), ensure_ascii=False, indent=2))
+            else:
+                print(bundle.answer_markdown, end="" if bundle.answer_markdown.endswith("\n") else "\n")
             return 0
-    except ObsidianCliUnavailableError as exc:
+    except (ObsidianCliUnavailableError, CodexCliUnavailableError, RuntimeError, FileNotFoundError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
 

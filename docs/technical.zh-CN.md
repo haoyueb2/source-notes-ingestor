@@ -16,6 +16,7 @@
 - HTML 解析与清洗：BeautifulSoup + 仓库内 HTML 工具
 - 存储形态：Obsidian Vault 中的 Markdown + YAML frontmatter
 - 状态管理：`Sources/_state` 下的 JSON 状态文件
+- 问答执行：本机 `codex` + 官方 Obsidian CLI + scope 派生包
 
 ## 仓库结构
 - `src/obsidian_knowledge_ingestor/`
@@ -28,8 +29,11 @@
   - `vault_writer.py`：Markdown 落盘、资源下载、状态写入
   - `pipeline.py`：端到端采集流程编排
   - `qa_runner.py`：官方 Obsidian CLI 封装
+  - `qa_builder.py`：scope 派生包生成
+  - `scope_loader.py`：人物 scope 配置加载
   - `verification.py`：抓取后校验逻辑
 - `docs/`：架构、计划、技术文档
+- `scopes/`：人物级 scope 配置
 - `samples/`：样例 target 配置
 - `targets/`：本地真实目标配置
 - `tests/`：单元测试
@@ -43,6 +47,8 @@
   -> CanonicalNote
   -> write_note()
   -> Obsidian Vault
+  -> build-qa(scope)
+  -> Derived/Scopes/<scope_id>/*.md
   -> query_vault()
 ```
 
@@ -143,6 +149,7 @@ Vault 目录结构固定为：
 - `Sources/Zhihu/<author>/thoughts/*.md`
 - `Sources/Zhihu/<author>/articles/*.md`
 - `Sources/WeChat/<account>/*.md`
+- `Derived/Scopes/<scope_id>/*.md`
 - `Sources/_assets/...`
 - `Sources/_state/...`
 
@@ -160,7 +167,33 @@ Vault 目录结构固定为：
 - `oki verify zhihu --target <file> --vault <path>`
 - `oki search <query>`
 - `oki read <note-path>`
-- `oki ask <prompt>`
+- `oki build-qa --scope <scope_id>`
+- `oki qa-search --scope <scope_id> --query <text>`
+- `oki qa-read --path <note-path>`
+- `oki qa-open-derived --scope <scope_id> --kind <kind>`
+- `oki ask <prompt> --scope <scope_id>`
+
+## 问答层实现
+当前问答层不是“程序先写死检索逻辑再拼答案”，而是：
+1. `oki build-qa` 先为人物级 `scope` 生成派生包。
+2. 程序负责生成确定性文件：
+   - `manifest.md`
+   - `corpus_index.md`
+   - `full_context.md`
+3. 本机 `codex` 负责生成高阶归纳文件：
+   - `overview.md`
+   - `themes.md`
+4. `oki ask` 默认直接调用本机 `codex`。
+5. Codex 必须先读派生地图，再通过受控 helper 多轮检索原始 note。
+6. 最终回答必须给：
+   - 完整分析过程
+   - 最终回答
+   - 原始 note 引用
+
+这里有一个边界要特别明确：
+- 派生包只用于导航、全局理解和检索辅助
+- 最终证据必须回到 `Sources/**` 下的原始 note
+- scope 边界由 `scopes/*.json` 显式维护，不靠自动猜测
 
 ## 测试覆盖
 当前自动化测试主要覆盖：
