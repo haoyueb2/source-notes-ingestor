@@ -134,21 +134,43 @@ def _build_manifest_body(scope, notes: list[VaultNoteRecord], generated_files: d
     return "\n".join(lines)
 
 
+def _compact_summary(text: str, limit: int = 120) -> str:
+    normalized = " ".join((text or "").split())
+    if not normalized:
+        return "(none)"
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[:limit].rstrip() + "..."
+
+
 def _build_corpus_index_body(scope, notes: list[VaultNoteRecord]) -> str:
-    lines = [f"# Corpus Index: {scope.display_name}", ""]
+    source_counts: dict[str, int] = {}
+    content_counts: dict[str, int] = {}
+    for note in notes:
+        source_counts[note.source] = source_counts.get(note.source, 0) + 1
+        content_counts[note.content_type] = content_counts.get(note.content_type, 0) + 1
+
+    lines = [
+        f"# Corpus Index: {scope.display_name}",
+        "",
+        "Compact retrieval-oriented note index. This file is for topic navigation, not for evidence synthesis.",
+        "",
+        f"- Total notes: {len(notes)}",
+        f"- Sources: {', '.join(f'{name}={count}' for name, count in sorted(source_counts.items())) or '(none)'}",
+        f"- Types: {', '.join(f'{name}={count}' for name, count in sorted(content_counts.items())) or '(none)'}",
+        "",
+        "## Entries",
+        "",
+    ]
     for idx, note in enumerate(notes, start=1):
+        published = note.published_at or note.updated_at or "unknown"
         lines.extend(
             [
-                f"## {idx:03d}. {note.title}",
-                "",
-                f"- Path: `{note.relpath}`",
-                f"- Source: `{note.source}`",
-                f"- Type: `{note.content_type}`",
-                f"- Author: `{note.author_name}`",
-                f"- Published: {_yaml_scalar(note.published_at)}",
-                f"- Updated: {_yaml_scalar(note.updated_at)}",
-                f"- Summary: {note.summary or '(none)'}",
-                "",
+                (
+                    f"- [{idx:03d}] `{note.title}` | source=`{note.source}` | type=`{note.content_type}`"
+                    f" | published={_yaml_scalar(published)} | path=`{note.relpath}`"
+                ),
+                f"  summary: {_compact_summary(note.summary)}",
             ]
         )
     return "\n".join(lines)
@@ -190,7 +212,7 @@ def _codex_exec_prefix(binary: str, cwd: Path, vault_path: Path) -> list[str]:
     model = os.environ.get("OKI_CODEX_MODEL")
     if model:
         cmd.extend(["-m", model])
-    reasoning = os.environ.get("OKI_CODEX_REASONING_EFFORT")
+    reasoning = os.environ.get("OKI_CODEX_REASONING_EFFORT", "medium").strip()
     if reasoning:
         cmd.extend(["-c", f'model_reasoning_effort="{reasoning}"'])
     return cmd

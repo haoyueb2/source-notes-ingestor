@@ -178,7 +178,7 @@ source .venv/bin/activate
 export PYTHONPATH=src
 export OBSIDIAN_VAULT_PATH=/Users/haoyuebai/Documents/oki-main-vault
 export OKI_CODEX_MODEL=gpt-5.4
-export OKI_CODEX_REASONING_EFFORT=high
+export OKI_CODEX_REASONING_EFFORT=medium
 export OKI_CODEX_STREAM=1
 ```
 
@@ -204,7 +204,8 @@ What you should expect at runtime:
 - `build-qa` streams Codex output when `OKI_CODEX_STREAM=1`, so you can watch the overview/theme generation live.
 - `oki ask` prints retrieval progress such as `[oki ask] planning retrieval` and `[oki ask] searching ...`.
 - The final long-form answer is emitted once, after the raw evidence bundle has been collected and synthesized.
-- `map` mode preloads `overview`, `themes`, and `corpus_index`, then retrieves raw notes.
+- `map` mode preloads `overview` and `themes`, then retrieves raw notes.
+- If the first retrieval pass is too thin, `map` mode retries planning with a compact `corpus_index` fallback.
 - `fulltext` mode additionally preloads a truncated `full_context` extract, so it is materially more expensive in prompt size.
 
 ## Scope config
@@ -236,7 +237,7 @@ Example:
 The generated files are split by responsibility:
 - Program-generated deterministic files:
   - `manifest.md`
-  - `corpus_index.md`
+  - `corpus_index.md` (compact retrieval index)
   - `full_context.md`
 - Codex-generated derived maps:
   - `overview.md`
@@ -255,4 +256,5 @@ The generated files are split by responsibility:
 - The tested serious-answer flow that asked `感到无聊老想出去玩social是对的吗` was run in `--context-mode map`, not `fulltext`.
 - One measured successful run used `35,623` tokens total across the planning stage and final synthesis stage.
 - A later stabilized rerun used the same `map` path, with planning alone at `28,930` tokens; the final synthesis stage was non-streamed, so the exact total for that rerun was not exposed by the local CLI.
+- Those numbers were recorded before the lighter `map` planning change that removed default `corpus_index` preload and compacted the generated corpus index.
 - This repository does not know how to map local Codex token usage to an exact percentage of a 5-hour quota. The local CLI exposes per-run token counts, but not the quota denominator.

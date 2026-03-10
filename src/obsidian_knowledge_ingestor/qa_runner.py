@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from functools import lru_cache
 from pathlib import Path
 
@@ -73,6 +73,37 @@ QUERY_STOPWORDS = {
     "这个",
     "那个",
 }
+
+DEFAULT_REASONING_EFFORT = "medium"
+MAP_CORPUS_INDEX_FALLBACK_CHARS = 8000
+MIN_EVIDENCE_NOTES = 4
+
+
+@dataclass(slots=True)
+class CodexUsage:
+    input_tokens: int = 0
+    cached_input_tokens: int = 0
+    output_tokens: int = 0
+
+    def add(self, other: "CodexUsage | None") -> "CodexUsage":
+        if other is None:
+            return CodexUsage(
+                input_tokens=self.input_tokens,
+                cached_input_tokens=self.cached_input_tokens,
+                output_tokens=self.output_tokens,
+            )
+        return CodexUsage(
+            input_tokens=self.input_tokens + other.input_tokens,
+            cached_input_tokens=self.cached_input_tokens + other.cached_input_tokens,
+            output_tokens=self.output_tokens + other.output_tokens,
+        )
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+
+_LAST_CODEX_USAGE: CodexUsage | None = None
 
 
 def _target_vault_context(vault: str | None, cwd: str | Path | None = None) -> tuple[str | None, str | Path | None]:
@@ -295,7 +326,7 @@ def _codex_exec_prefix(binary: str, cwd: Path, extra_dirs: list[Path]) -> list[s
     model = os.environ.get("OKI_CODEX_MODEL")
     if model:
         cmd.extend(["-m", model])
-    reasoning = os.environ.get("OKI_CODEX_REASONING_EFFORT")
+    reasoning = os.environ.get("OKI_CODEX_REASONING_EFFORT", DEFAULT_REASONING_EFFORT).strip()
     if reasoning:
         cmd.extend(["-c", f'model_reasoning_effort="{reasoning}"'])
     return cmd
@@ -319,6 +350,48 @@ def _build_codex_env(scopes_dir: str | Path | None = None) -> tuple[dict[str, st
     return env, root
 
 
+def _parse_codex_usage(stdout: str) -> CodexUsage | None:
+    usage: CodexUsage | None = None
+    for line in stdout.splitlines():
+        text = line.strip()
+        if not text or not text.startswith("{"):
+            continue
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("type") != "turn.completed":
+            continue
+        raw_usage = payload.get("usage")
+        if not isinstance(raw_usage, dict):
+            continue
+        usage = CodexUsage(
+            input_tokens=int(raw_usage.get("input_tokens") or 0),
+            cached_input_tokens=int(raw_usage.get("cached_input_tokens") or 0),
+            output_tokens=int(raw_usage.get("output_tokens") or 0),
+        )
+    return usage
+
+
+def _set_last_codex_usage(usage: CodexUsage | None) -> None:
+    global _LAST_CODEX_USAGE
+    _LAST_CODEX_USAGE = usage
+
+
+def _consume_last_codex_usage() -> CodexUsage | None:
+    global _LAST_CODEX_USAGE
+    usage = _LAST_CODEX_USAGE
+    _LAST_CODEX_USAGE = None
+    return usage
+
+
+def _usage_text(usage: CodexUsage) -> str:
+    return (
+        f"input={usage.input_tokens}, cached_input={usage.cached_input_tokens}, "
+        f"output={usage.output_tokens}, total={usage.total_tokens}"
+    )
+
+
 def _run_codex_json(
     prompt: str,
     schema: dict[str, object],
@@ -338,6 +411,7 @@ def _run_codex_json(
         result = subprocess.run(
             _codex_exec_prefix(binary, root, extra_dirs)
             + [
+                "--json",
                 "--output-schema",
                 str(schema_path),
                 "--output-last-message",
@@ -347,13 +421,12 @@ def _run_codex_json(
             cwd=root,
             env=env,
             input=prompt,
-            capture_output=not stream_output,
+            capture_output=True,
             text=True,
         )
+        _set_last_codex_usage(_parse_codex_usage(result.stdout or ""))
         if result.returncode != 0:
-            message = ""
-            if not stream_output:
-                message = (result.stderr or result.stdout or "").strip()
+            message = (result.stderr or result.stdout or "").strip()
             raise RuntimeError(message or "codex exec failed while generating structured retrieval output.")
         return json.loads(output_path.read_text(encoding="utf-8"))
 
@@ -372,20 +445,89 @@ def _run_codex_markdown(
         output_path = Path(tmp_dir) / "codex-last-message.md"
         cmd = _codex_exec_prefix(binary, root, extra_dirs)
         cmd.extend(["--output-last-message", str(output_path), "-"])
-        result = subprocess.run(
-            cmd,
-            cwd=root,
-            env=env,
-            input=prompt,
-            capture_output=not stream_output,
-            text=True,
-        )
+        if stream_output:
+            result = _run_codex_markdown_streaming(cmd, prompt, cwd=root, env=env)
+        else:
+            result = subprocess.run(
+                [*cmd[: len(cmd) - 3], "--json", *cmd[len(cmd) - 3 :]],
+                cwd=root,
+                env=env,
+                input=prompt,
+                capture_output=True,
+                text=True,
+            )
+            _set_last_codex_usage(_parse_codex_usage(result.stdout or ""))
         if result.returncode != 0:
-            message = ""
-            if not stream_output:
-                message = (result.stderr or result.stdout or "").strip()
+            message = (result.stderr or result.stdout or "").strip()
             raise RuntimeError(message or "codex exec failed while synthesizing the scope answer.")
         return output_path.read_text(encoding="utf-8")
+
+
+def _run_codex_markdown_streaming(
+    command: list[str],
+    prompt: str,
+    cwd: Path,
+    env: dict[str, str],
+) -> subprocess.CompletedProcess[str]:
+    proc = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    assert proc.stdin is not None
+    proc.stdin.write(prompt)
+    proc.stdin.close()
+    assert proc.stdout is not None
+    stdout_lines: list[str] = []
+    capture_started = False
+    emitted_text = ""
+    duplicate_probe = ""
+    duplicate_probe_lines = 0
+    suppress_duplicate = False
+    for line in proc.stdout:
+        stdout_lines.append(line)
+        stripped = line.rstrip("\n")
+        if not capture_started:
+            if stripped == "codex":
+                capture_started = True
+            continue
+        if stripped == "tokens used":
+            suppress_duplicate = True
+            duplicate_probe = ""
+            continue
+        if suppress_duplicate:
+            continue
+        if emitted_text and emitted_text.startswith(duplicate_probe + line):
+            duplicate_probe += line
+            duplicate_probe_lines += 1
+            if len(duplicate_probe) >= min(80, len(emitted_text)) or duplicate_probe_lines >= 3:
+                suppress_duplicate = True
+                duplicate_probe = ""
+            continue
+        if duplicate_probe:
+            sys.stdout.write(duplicate_probe)
+            sys.stdout.flush()
+            emitted_text += duplicate_probe
+            duplicate_probe = ""
+            duplicate_probe_lines = 0
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        emitted_text += line
+    if duplicate_probe and not suppress_duplicate:
+        sys.stdout.write(duplicate_probe)
+        sys.stdout.flush()
+        emitted_text += duplicate_probe
+    stderr_text = ""
+    if proc.stderr is not None:
+        stderr_text = proc.stderr.read()
+    returncode = proc.wait()
+    _set_last_codex_usage(None)
+    return subprocess.CompletedProcess(command, returncode, "".join(stdout_lines), stderr_text)
 
 
 def _helper_prefix() -> str:
@@ -510,6 +652,7 @@ def _build_retrieval_plan_prompt(
     scope_id: str,
     context_mode: str,
     preloaded_context: dict[str, str],
+    planning_note: str | None = None,
 ) -> str:
     lines = [
         f'You are planning retrieval for a serious scope-grounded question about "{scope_id}".',
@@ -531,6 +674,8 @@ def _build_retrieval_plan_prompt(
         f"Context mode: {context_mode}",
         "Use the derived context below as navigation only.",
     ]
+    if planning_note:
+        lines.extend(["", "Planning note:", planning_note.strip()])
     for kind, body in preloaded_context.items():
         lines.extend(["", f"### BEGIN {kind.upper()}", body, f"### END {kind.upper()}"])
     lines.extend(["", "User question:", prompt.strip()])
@@ -561,15 +706,31 @@ def _search_scope_with_retry(
     raise last_error or RuntimeError(f"Search failed for scope {scope_id!r}.")
 
 
-def _collect_preloaded_context(scope_id: str, vault_root: Path, context_mode: str) -> dict[str, str]:
+def _collect_preloaded_context(
+    scope_id: str,
+    vault_root: Path,
+    context_mode: str,
+    *,
+    include_corpus_index: bool = False,
+) -> dict[str, str]:
     preloaded_context = {
         "overview": _truncate_for_prompt(_read_derived_note_body("overview", scope_id, vault_root), 32000),
         "themes": _truncate_for_prompt(_read_derived_note_body("themes", scope_id, vault_root), 40000),
     }
     if context_mode == "fulltext":
         preloaded_context["full_context"] = _truncate_for_prompt(_read_derived_note_body("full_context", scope_id, vault_root), 70000)
-    else:
+    elif include_corpus_index:
         preloaded_context["corpus_index"] = _truncate_for_prompt(_read_derived_note_body("corpus_index", scope_id, vault_root), 24000)
+    return preloaded_context
+
+
+def _fallback_planning_context(scope_id: str, vault_root: Path, context_mode: str) -> dict[str, str]:
+    preloaded_context = _collect_preloaded_context(scope_id, vault_root, context_mode)
+    if context_mode == "map":
+        preloaded_context["corpus_index"] = _truncate_for_prompt(
+            _read_derived_note_body("corpus_index", scope_id, vault_root),
+            MAP_CORPUS_INDEX_FALLBACK_CHARS,
+        )
     return preloaded_context
 
 
@@ -640,6 +801,12 @@ def _collect_evidence_bundle(
     if not bundle:
         raise RuntimeError(f"Unable to read raw evidence notes for scope {scope_id!r}.")
     return query_runs, bundle
+
+
+def _should_retry_with_corpus_index(context_mode: str, bundle: list[dict[str, object]]) -> bool:
+    if context_mode != "map":
+        return False
+    return len(bundle) < MIN_EVIDENCE_NOTES
 
 
 def _build_synthesis_prompt(
@@ -810,6 +977,7 @@ def ask_scope(
     context_mode: str = "map",
     agent: str = "codex",
     scopes_dir: str | Path | None = None,
+    stream_final_answer: bool = False,
 ) -> AskResultBundle:
     vault_root = Path(vault_path).expanduser()
     if not derived_scope_dir(scope_id, vault_root).exists():
@@ -821,8 +989,15 @@ def ask_scope(
 
     if agent == "none":
         answer = _build_agent_prompt(prompt, scope_id, context_mode=context_mode, vault_path=vault_root)
-        return AskResultBundle(prompt=prompt, scope_id=scope_id, context_mode=context_mode, agent=agent, answer_markdown=answer)
+        return AskResultBundle(
+            prompt=prompt,
+            scope_id=scope_id,
+            context_mode=context_mode,
+            agent=agent,
+            answer_markdown=answer,
+        )
 
+    total_usage = CodexUsage()
     preloaded_context = _collect_preloaded_context(scope_id, vault_root, context_mode=context_mode)
     _progress("planning retrieval")
     plan_payload = _run_codex_json(
@@ -852,16 +1027,77 @@ def ask_scope(
         scopes_dir=scopes_dir,
         stream_output=True,
     )
+    planning_usage = _consume_last_codex_usage()
+    if planning_usage:
+        total_usage = total_usage.add(planning_usage)
+        _progress(f"planning usage: {_usage_text(planning_usage)}")
     question_reframing, query_plan = _normalize_query_plan(plan_payload, prompt)
     query_runs, evidence_bundle = _collect_evidence_bundle(scope_id, query_plan, vault_root, scopes_dir=scopes_dir)
+    if _should_retry_with_corpus_index(context_mode, evidence_bundle):
+        _progress("retrying retrieval planning with corpus index fallback")
+        fallback_plan_payload = _run_codex_json(
+            _build_retrieval_plan_prompt(
+                prompt,
+                scope_id,
+                context_mode=context_mode,
+                preloaded_context=_fallback_planning_context(scope_id, vault_root, context_mode),
+                planning_note=(
+                    "The first retrieval pass did not gather enough distinct raw notes. "
+                    "Use the compact corpus index below only to widen recall and diversify query coverage."
+                ),
+            ),
+            schema={
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["question_reframing", "query_plan"],
+                "properties": {
+                    "question_reframing": {"type": "string"},
+                    "query_plan": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["query", "bucket", "why"],
+                            "properties": {
+                                "query": {"type": "string"},
+                                "bucket": {"type": "string"},
+                                "why": {"type": "string"},
+                            },
+                        },
+                    },
+                },
+            },
+            extra_dirs=[vault_root],
+            scopes_dir=scopes_dir,
+            stream_output=True,
+        )
+        fallback_usage = _consume_last_codex_usage()
+        if fallback_usage:
+            total_usage = total_usage.add(fallback_usage)
+            _progress(f"fallback planning usage: {_usage_text(fallback_usage)}")
+        question_reframing, query_plan = _normalize_query_plan(fallback_plan_payload, prompt)
+        query_runs, evidence_bundle = _collect_evidence_bundle(scope_id, query_plan, vault_root, scopes_dir=scopes_dir)
     _progress("synthesizing final answer")
     answer = _run_codex_markdown(
         _build_synthesis_prompt(prompt, scope_id, question_reframing, query_runs, evidence_bundle),
         extra_dirs=[vault_root],
         scopes_dir=scopes_dir,
-        stream_output=False,
+        stream_output=stream_final_answer,
     )
-    return AskResultBundle(prompt=prompt, scope_id=scope_id, context_mode=context_mode, agent=agent, answer_markdown=answer)
+    synthesis_usage = _consume_last_codex_usage()
+    if synthesis_usage:
+        total_usage = total_usage.add(synthesis_usage)
+        _progress(f"synthesis usage: {_usage_text(synthesis_usage)}")
+    if total_usage.total_tokens:
+        _progress(f"total codex usage: {_usage_text(total_usage)}")
+    return AskResultBundle(
+        prompt=prompt,
+        scope_id=scope_id,
+        context_mode=context_mode,
+        agent=agent,
+        answer_markdown=answer,
+        answer_streamed=stream_final_answer,
+    )
 
 
 def ask_scope_as_json(

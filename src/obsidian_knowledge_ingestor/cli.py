@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import subprocess
@@ -47,6 +48,37 @@ def _strip_frontmatter(text: str) -> str:
     if len(parts) < 3:
         return text
     return parts[2]
+
+
+class _TeeStream:
+    def __init__(self, *streams):
+        self._streams = streams
+
+    def write(self, text: str) -> int:
+        for stream in self._streams:
+            stream.write(text)
+        return len(text)
+
+    def flush(self) -> None:
+        for stream in self._streams:
+            stream.flush()
+
+
+def _default_ask_log_path(config: AppConfig, scope: str) -> Path:
+    logs_dir = config.state_dir / "ask_logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    return logs_dir / f"{timestamp}-{slugify(scope)}.log"
+
+
+@contextlib.contextmanager
+def _ask_logging_context(config: AppConfig, scope: str):
+    log_path = _default_ask_log_path(config, scope)
+    with log_path.open("w", encoding="utf-8") as handle:
+        tee = _TeeStream(sys.stderr, handle)
+        with contextlib.redirect_stderr(tee):
+            print(f"[oki ask] log file: {log_path}", file=sys.stderr)
+            yield log_path
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -327,16 +359,18 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 print(payload)
                 return 0
-            bundle = ask_scope(
-                args.prompt,
-                args.scope,
-                config.vault_path,
-                context_mode=args.context_mode,
-                agent=args.agent,
-            )
+            with _ask_logging_context(config, args.scope):
+                bundle = ask_scope(
+                    args.prompt,
+                    args.scope,
+                    config.vault_path,
+                    context_mode=args.context_mode,
+                    agent=args.agent,
+                    stream_final_answer=not args.json,
+                )
             if args.json:
                 print(json.dumps(asdict(bundle), ensure_ascii=False, indent=2))
-            else:
+            elif not bundle.answer_streamed:
                 print(bundle.answer_markdown, end="" if bundle.answer_markdown.endswith("\n") else "\n")
             return 0
     except (ObsidianCliUnavailableError, CodexCliUnavailableError, RuntimeError, FileNotFoundError, ValueError) as exc:

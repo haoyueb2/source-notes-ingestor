@@ -215,7 +215,7 @@ But it moves the brittle part, namely repeated vault retrieval execution, back i
 1. verify that `Derived/Scopes/<scope_id>/` exists
 2. preload `overview.md` and `themes.md`
 3. preload either:
-   - `corpus_index.md` in `map` mode
+   - a compact `corpus_index.md` only as a fallback aid in `map` mode
    - `full_context.md` in `fulltext` mode
 4. ask Codex for a structured retrieval plan in JSON
 5. normalize and extend that plan with fallback queries derived from the user prompt
@@ -240,9 +240,10 @@ Current behavior:
 `oki ask` currently supports two context modes.
 
 `map` mode:
-- preload `overview`, `themes`, and `corpus_index`
+- preload `overview` and `themes`
 - use them as author-map context
 - derive multiple retrieval queries
+- if the first retrieval pass is too thin, retry planning with a compact `corpus_index`
 - fetch raw notes for final evidence
 
 `fulltext` mode:
@@ -260,7 +261,7 @@ The QA layer currently honors:
 
 Typical serious-study setup:
 - `OKI_CODEX_MODEL=gpt-5.4`
-- `OKI_CODEX_REASONING_EFFORT=high`
+- `OKI_CODEX_REASONING_EFFORT=medium`
 - `OKI_CODEX_STREAM=1`
 
 ### Measured usage from a live smoke test
@@ -276,6 +277,7 @@ Execution mode:
 Observed token usage:
 - one measured successful run: `35,623` total tokens
 - a later stabilized rerun exposed `28,930` planning tokens, but the final non-streamed synthesis stage did not expose its own count through the local CLI
+- those numbers were recorded before the lighter `map` planning change that removed default `corpus_index` preload
 
 This project does not currently know the denominator for Codex's rolling 5-hour quota, so it cannot convert those run totals into a trustworthy percentage.
 

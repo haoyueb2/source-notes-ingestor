@@ -8,10 +8,12 @@ from obsidian_knowledge_ingestor.models import EvidenceItem, QueryResult
 from obsidian_knowledge_ingestor.qa_runner import (
     ObsidianCliUnavailableError,
     _build_agent_prompt,
+    _codex_exec_prefix,
     _extract_paths_from_search_stdout,
     _fallback_queries,
     _normalize_query_plan,
     _obsidian_binary,
+    _parse_codex_usage,
     ask_scope,
     search,
     search_scope,
@@ -128,6 +130,28 @@ This line discusses deep thought and reflective practice.
         self.assertIn("机会", values)
         self.assertIn("内耗", values)
 
+    def test_codex_exec_prefix_defaults_reasoning_effort_to_medium(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            cmd = _codex_exec_prefix("codex", Path("/repo"), [Path("/vault")])
+        self.assertIn('-c', cmd)
+        self.assertIn('model_reasoning_effort="medium"', cmd)
+
+    def test_parse_codex_usage_reads_turn_completed_event(self) -> None:
+        usage = _parse_codex_usage(
+            '\n'.join(
+                [
+                    '{"type":"thread.started"}',
+                    'not-json',
+                    '{"type":"turn.completed","usage":{"input_tokens":123,"cached_input_tokens":45,"output_tokens":67}}',
+                ]
+            )
+        )
+        self.assertIsNotNone(usage)
+        assert usage is not None
+        self.assertEqual(usage.input_tokens, 123)
+        self.assertEqual(usage.cached_input_tokens, 45)
+        self.assertEqual(usage.output_tokens, 67)
+
     def test_ask_scope_plans_retrieval_then_synthesizes_from_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -233,9 +257,99 @@ This line discusses deep thought and reflective practice.
         self.assertIn("Your job is to produce a high-quality retrieval plan", planning_prompt)
         self.assertIn("### BEGIN OVERVIEW", planning_prompt)
         self.assertIn("body for overview.md", planning_prompt)
+        self.assertNotIn("### BEGIN CORPUS_INDEX", planning_prompt)
         self.assertIn("Raw evidence bundle:", synthesis_prompt)
         self.assertIn("Sources/Zhihu/demo/answers/example.md", synthesis_prompt)
         self.assertIn("Question reframing:", synthesis_prompt)
+
+    def test_ask_scope_retries_map_planning_with_compact_corpus_index_when_evidence_is_thin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            vault = root / "vault"
+            derived = vault / "Derived" / "Scopes" / "demo"
+            derived.mkdir(parents=True)
+            for name in ["overview.md", "themes.md", "full_context.md"]:
+                (derived / name).write_text(f"---\nderived: \"true\"\n---\n# {name}\nbody for {name}\n", encoding="utf-8")
+            (derived / "corpus_index.md").write_text(
+                "---\nderived: \"true\"\n---\n# corpus\nentry one\nentry two\n",
+                encoding="utf-8",
+            )
+            scopes = root / "scopes"
+            scopes.mkdir()
+            (scopes / "demo.json").write_text(
+                json.dumps(
+                    {
+                        "scope_id": "demo",
+                        "display_name": "Demo",
+                        "sources": [{"path": "Sources/Zhihu/demo", "source": "zhihu"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            prompts: list[str] = []
+
+            def fake_plan(prompt, schema, extra_dirs, scopes_dir=None, stream_output=None):
+                prompts.append(prompt)
+                if len(prompts) == 1:
+                    return {
+                        "question_reframing": "第一次规划",
+                        "query_plan": [{"query": "无聊", "bucket": "surface", "why": "先试一轮"}],
+                    }
+                return {
+                    "question_reframing": "第二次规划",
+                    "query_plan": [
+                        {"query": "无聊", "bucket": "surface", "why": "命中表层情绪"},
+                        {"query": "独处", "bucket": "motive", "why": "拉开主题"},
+                        {"query": "朋友", "bucket": "social", "why": "补关系维度"},
+                        {"query": "自由", "bucket": "criteria", "why": "补评价维度"},
+                    ],
+                }
+
+            def fake_search_scope(scope_id, query, vault_path, scopes_dir=None, limit=8):
+                if len(prompts) == 1:
+                    return [
+                        EvidenceItem(
+                            path="Sources/Zhihu/demo/answers/example.md",
+                            title="A Note",
+                            source="zhihu",
+                            content_type="answer",
+                            snippet="这段内容谈到无聊与反思。",
+                            score=8.0,
+                        )
+                    ]
+                return [
+                    EvidenceItem(
+                        path=f"Sources/Zhihu/demo/answers/{query}.md",
+                        title=f"{query} Note",
+                        source="zhihu",
+                        content_type="answer",
+                        snippet=f"这段内容谈到{query}。",
+                        score=8.0,
+                    )
+                ]
+
+            def fake_read(path, vault=None, cwd=None):
+                return QueryResult(
+                    command=["obsidian"],
+                    stdout=f"---\ntitle: \"{Path(path).stem}\"\n---\n这是 {path} 的正文，包含足够多的上下文。",
+                    stderr="",
+                    returncode=0,
+                )
+
+            with patch("obsidian_knowledge_ingestor.qa_runner._run_codex_json", side_effect=fake_plan):
+                with patch("obsidian_knowledge_ingestor.qa_runner.search_scope", side_effect=fake_search_scope):
+                    with patch("obsidian_knowledge_ingestor.qa_runner.read_note", side_effect=fake_read):
+                        with patch(
+                            "obsidian_knowledge_ingestor.qa_runner._run_codex_markdown",
+                            return_value="## Analysis Trace\n\ntrace\n\n## Answer\n\nanswer\n\n## Citations\n",
+                        ):
+                            ask_scope("他怎么看成长?", "demo", vault, context_mode="map", scopes_dir=scopes)
+
+        self.assertEqual(len(prompts), 2)
+        self.assertNotIn("### BEGIN CORPUS_INDEX", prompts[0])
+        self.assertIn("### BEGIN CORPUS_INDEX", prompts[1])
+        self.assertIn("Planning note:", prompts[1])
 
     def test_build_agent_prompt_fulltext_mode_mentions_full_context(self) -> None:
         prompt = _build_agent_prompt("问题", "demo", "fulltext", Path("/vault"))

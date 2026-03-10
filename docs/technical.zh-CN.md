@@ -221,7 +221,7 @@ Vault 目录结构固定为：
 1. 检查 `Derived/Scopes/<scope_id>/` 是否存在
 2. 预加载 `overview.md` 和 `themes.md`
 3. 再按模式预加载：
-   - `map` 模式加载 `corpus_index.md`
+   - `map` 模式只在 fallback 时再带上一份紧凑版 `corpus_index.md`
    - `fulltext` 模式加载 `full_context.md`
 4. 让 Codex 先产出 JSON 检索计划
 5. 程序对计划做规范化，并补上从用户问题派生出的 fallback queries
@@ -246,9 +246,10 @@ Vault 目录结构固定为：
 `oki ask` 当前支持两种上下文模式。
 
 `map` 模式：
-- 预加载 `overview`、`themes`、`corpus_index`
+- 预加载 `overview`、`themes`
 - 先建立作者地图
 - 再派生多组 query 去检索原始 note
+- 如果首轮检索拿到的原始 note 太少，再用紧凑版 `corpus_index` 做 fallback planning
 - 最终证据仍然来自原始 note
 
 `fulltext` 模式：
@@ -266,7 +267,7 @@ Vault 目录结构固定为：
 
 严肃使用场景推荐：
 - `OKI_CODEX_MODEL=gpt-5.4`
-- `OKI_CODEX_REASONING_EFFORT=high`
+- `OKI_CODEX_REASONING_EFFORT=medium`
 - `OKI_CODEX_STREAM=1`
 
 ### 一次真实 smoke test 的用量
@@ -283,6 +284,7 @@ Vault 目录结构固定为：
 - 一次成功 run 明确测到总共 `35,623` tokens
 - 后续稳定化后的 rerun，planning 阶段明确看到 `28,930` tokens
 - 但 final synthesis 因为是 non-stream capture，CLI 没额外暴露那一段的 token 数
+- 上面的数字来自旧版 `map` 路径；当前实现已经去掉默认 `corpus_index` 预加载，并把 `build-qa` 生成的 `corpus_index` 收紧成轻量索引
 
 目前项目拿不到 Codex 5 小时滚动额度的总 denominator，所以不能把这次 run 的 token 数可靠地换算成“用了额度的百分之多少”。
 

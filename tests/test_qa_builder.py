@@ -4,10 +4,41 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from obsidian_knowledge_ingestor.qa_builder import _build_scope_map_prompt, _write_derived_note, build_scope_package
+from obsidian_knowledge_ingestor.qa_builder import (
+    VaultNoteRecord,
+    _build_corpus_index_body,
+    _build_scope_map_prompt,
+    _write_derived_note,
+    build_scope_package,
+)
 
 
 class QaBuilderTests(unittest.TestCase):
+    def test_build_corpus_index_body_is_compact(self) -> None:
+        scope = type("Scope", (), {"display_name": "Demo"})()
+        body = _build_corpus_index_body(
+            scope,
+            [
+                VaultNoteRecord(
+                    path=Path("/vault/Sources/Zhihu/demo/answers/one.md"),
+                    relpath="Sources/Zhihu/demo/answers/one.md",
+                    source="zhihu",
+                    content_type="answer",
+                    title="One",
+                    author_name="Demo",
+                    published_at="2024-01-01",
+                    updated_at="2024-01-02",
+                    summary="A" * 180,
+                    body="Body one.",
+                )
+            ],
+        )
+        self.assertIn("Compact retrieval-oriented note index", body)
+        self.assertIn("- [001] `One`", body)
+        self.assertIn("summary: ", body)
+        self.assertNotIn("## 001. One", body)
+        self.assertNotIn("A" * 180, body)
+
     def test_scope_map_prompt_requires_deep_overview_and_theme_atlas(self) -> None:
         prompt = _build_scope_map_prompt(
             "demo",
