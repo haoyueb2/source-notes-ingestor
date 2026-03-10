@@ -252,14 +252,15 @@ This line discusses deep thought and reflective practice.
                 with patch("obsidian_knowledge_ingestor.qa_runner.search_scope", side_effect=fake_search_scope):
                     with patch("obsidian_knowledge_ingestor.qa_runner.read_note", side_effect=fake_read):
                         with patch("obsidian_knowledge_ingestor.qa_runner._run_codex_markdown", side_effect=fake_markdown):
-                            bundle = ask_scope(
-                                "他怎么看成长?",
-                                "demo",
-                                vault,
-                                context_mode="map",
-                                scopes_dir=scopes,
-                                stream_final_answer=True,
-                            )
+                            with patch("obsidian_knowledge_ingestor.qa_runner._consume_last_codex_streamed_output", return_value=True):
+                                bundle = ask_scope(
+                                    "他怎么看成长?",
+                                    "demo",
+                                    vault,
+                                    context_mode="map",
+                                    scopes_dir=scopes,
+                                    stream_final_answer=True,
+                                )
 
         self.assertEqual(bundle.scope_id, "demo")
         self.assertTrue(bundle.answer_streamed)
@@ -326,9 +327,10 @@ This line discusses deep thought and reflective practice.
 
         with patch("obsidian_knowledge_ingestor.qa_runner.subprocess.Popen", return_value=FakePopen()):
             with redirect_stdout(stdout):
-                result = _run_codex_markdown_streaming(["codex", "exec"], "prompt", Path("/tmp"), {})
+                result, streamed_output = _run_codex_markdown_streaming(["codex", "exec"], "prompt", Path("/tmp"), {})
 
         self.assertEqual(result.returncode, 0)
+        self.assertTrue(streamed_output)
         self.assertEqual(stdout.getvalue(), "## Answer\n\nline 1\nline 2\n")
 
     def test_ask_scope_retries_map_planning_with_compact_corpus_index_when_evidence_is_thin(self) -> None:

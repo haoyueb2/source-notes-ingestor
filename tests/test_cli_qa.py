@@ -103,6 +103,34 @@ class CliQaTests(unittest.TestCase):
             self.assertIn("[oki ask] log file:", log_text)
             self.assertIn(str(logs[0]), log_text)
 
+    def test_ask_command_falls_back_to_final_print_and_logs_answer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            vault = root / "vault"
+            state = root / "state"
+            vault.mkdir()
+            stderr = io.StringIO()
+            stdout = io.StringIO()
+            bundle = AskResultBundle(
+                prompt="问题",
+                scope_id="demo",
+                context_mode="map",
+                agent="codex",
+                answer_markdown="## Answer\n\nbody\n",
+                answer_streamed=False,
+            )
+            config = AppConfig(vault_path=vault, state_dir=state, raw_data_dir=root / "raw")
+            with patch("obsidian_knowledge_ingestor.cli.AppConfig.from_env", return_value=config):
+                with patch("obsidian_knowledge_ingestor.cli.ask_scope", return_value=bundle):
+                    with redirect_stdout(stdout), redirect_stderr(stderr):
+                        code = main(["ask", "问题", "--scope", "demo", "--vault", str(vault)])
+            self.assertEqual(code, 0)
+            self.assertIn("## Answer", stdout.getvalue())
+            logs = list((state / "ask_logs").glob("*.log"))
+            self.assertEqual(len(logs), 1)
+            log_text = logs[0].read_text(encoding="utf-8")
+            self.assertIn("## Answer", log_text)
+
 
 if __name__ == "__main__":
     unittest.main()

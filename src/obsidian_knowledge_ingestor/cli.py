@@ -81,8 +81,9 @@ def _default_ask_log_path(config: AppConfig, scope: str) -> Path:
 def _ask_logging_context(config: AppConfig, scope: str):
     log_path = _default_ask_log_path(config, scope)
     with log_path.open("w", encoding="utf-8") as handle:
-        tee = _TeeStream(sys.stderr, handle)
-        with contextlib.redirect_stderr(tee):
+        stderr_tee = _TeeStream(sys.stderr, handle)
+        stdout_tee = _TeeStream(sys.stdout, handle)
+        with contextlib.redirect_stderr(stderr_tee), contextlib.redirect_stdout(stdout_tee):
             print(f"[oki ask] log file: {log_path}", file=sys.stderr)
             yield log_path
 
@@ -379,10 +380,10 @@ def main(argv: list[str] | None = None) -> int:
                     agent=args.agent,
                     stream_final_answer=not args.json,
                 )
-            if args.json:
-                print(json.dumps(asdict(bundle), ensure_ascii=False, indent=2))
-            elif not bundle.answer_streamed:
-                print(bundle.answer_markdown, end="" if bundle.answer_markdown.endswith("\n") else "\n")
+                if args.json:
+                    print(json.dumps(asdict(bundle), ensure_ascii=False, indent=2))
+                elif not bundle.answer_streamed:
+                    print(bundle.answer_markdown, end="" if bundle.answer_markdown.endswith("\n") else "\n")
             return 0
     except (ObsidianCliUnavailableError, CodexCliUnavailableError, RuntimeError, FileNotFoundError, ValueError) as exc:
         print(str(exc), file=sys.stderr)

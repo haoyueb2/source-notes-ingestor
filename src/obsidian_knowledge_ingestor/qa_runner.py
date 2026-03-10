@@ -104,6 +104,7 @@ class CodexUsage:
 
 
 _LAST_CODEX_USAGE: CodexUsage | None = None
+_LAST_CODEX_STREAMED_OUTPUT = False
 
 
 def _target_vault_context(vault: str | None, cwd: str | Path | None = None) -> tuple[str | None, str | Path | None]:
@@ -385,6 +386,18 @@ def _consume_last_codex_usage() -> CodexUsage | None:
     return usage
 
 
+def _set_last_codex_streamed_output(streamed_output: bool) -> None:
+    global _LAST_CODEX_STREAMED_OUTPUT
+    _LAST_CODEX_STREAMED_OUTPUT = streamed_output
+
+
+def _consume_last_codex_streamed_output() -> bool:
+    global _LAST_CODEX_STREAMED_OUTPUT
+    streamed_output = _LAST_CODEX_STREAMED_OUTPUT
+    _LAST_CODEX_STREAMED_OUTPUT = False
+    return streamed_output
+
+
 def _usage_text(usage: CodexUsage) -> str:
     return (
         f"input={usage.input_tokens}, cached_input={usage.cached_input_tokens}, "
@@ -446,7 +459,8 @@ def _run_codex_markdown(
         cmd = _codex_exec_prefix(binary, root, extra_dirs)
         cmd.extend(["--output-last-message", str(output_path), "-"])
         if stream_output:
-            result = _run_codex_markdown_streaming(cmd, prompt, cwd=root, env=env)
+            result, streamed_output = _run_codex_markdown_streaming(cmd, prompt, cwd=root, env=env)
+            _set_last_codex_streamed_output(streamed_output)
         else:
             result = subprocess.run(
                 [*cmd[: len(cmd) - 3], "--json", *cmd[len(cmd) - 3 :]],
@@ -457,6 +471,7 @@ def _run_codex_markdown(
                 text=True,
             )
             _set_last_codex_usage(_parse_codex_usage(result.stdout or ""))
+            _set_last_codex_streamed_output(False)
         if result.returncode != 0:
             message = (result.stderr or result.stdout or "").strip()
             raise RuntimeError(message or "codex exec failed while synthesizing the scope answer.")
@@ -468,7 +483,7 @@ def _run_codex_markdown_streaming(
     prompt: str,
     cwd: Path,
     env: dict[str, str],
-) -> subprocess.CompletedProcess[str]:
+) -> tuple[subprocess.CompletedProcess[str], bool]:
     proc = subprocess.Popen(
         command,
         cwd=cwd,
@@ -489,6 +504,7 @@ def _run_codex_markdown_streaming(
     duplicate_probe = ""
     duplicate_probe_lines = 0
     suppress_duplicate = False
+    streamed_output = False
     for line in proc.stdout:
         stdout_lines.append(line)
         stripped = line.rstrip("\n")
@@ -513,21 +529,24 @@ def _run_codex_markdown_streaming(
             sys.stdout.write(duplicate_probe)
             sys.stdout.flush()
             emitted_text += duplicate_probe
+            streamed_output = True
             duplicate_probe = ""
             duplicate_probe_lines = 0
         sys.stdout.write(line)
         sys.stdout.flush()
         emitted_text += line
+        streamed_output = True
     if duplicate_probe and not suppress_duplicate:
         sys.stdout.write(duplicate_probe)
         sys.stdout.flush()
         emitted_text += duplicate_probe
+        streamed_output = True
     stderr_text = ""
     if proc.stderr is not None:
         stderr_text = proc.stderr.read()
     returncode = proc.wait()
     _set_last_codex_usage(None)
-    return subprocess.CompletedProcess(command, returncode, "".join(stdout_lines), stderr_text)
+    return subprocess.CompletedProcess(command, returncode, "".join(stdout_lines), stderr_text), streamed_output
 
 
 def _helper_prefix() -> str:
@@ -1084,6 +1103,7 @@ def ask_scope(
         scopes_dir=scopes_dir,
         stream_output=stream_final_answer,
     )
+    answer_streamed = _consume_last_codex_streamed_output()
     synthesis_usage = _consume_last_codex_usage()
     if synthesis_usage:
         total_usage = total_usage.add(synthesis_usage)
@@ -1096,7 +1116,7 @@ def ask_scope(
         context_mode=context_mode,
         agent=agent,
         answer_markdown=answer,
-        answer_streamed=stream_final_answer,
+        answer_streamed=answer_streamed,
     )
 
 
