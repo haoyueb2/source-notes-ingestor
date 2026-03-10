@@ -184,7 +184,7 @@ Recommended environment for the local Codex-backed QA flow:
 cd /Users/haoyuebai/Dev/ai/obsidian-knowledge-ingestor
 source .venv/bin/activate
 export PYTHONPATH=src
-export OBSIDIAN_VAULT_PATH=/Users/haoyuebai/Documents/oki-main-vault
+export OBSIDIAN_VAULT_PATH=~/Documents/oki-main-vault
 export OKI_CODEX_MODEL=gpt-5.4
 export OKI_CODEX_REASONING_EFFORT=medium
 export OKI_CODEX_STREAM=1
@@ -193,19 +193,19 @@ export OKI_CODEX_STREAM=1
 Build or rebuild the scope package:
 
 ```bash
-python3 -m obsidian_knowledge_ingestor.cli build-qa --scope linlin --vault /Users/haoyuebai/Documents/oki-main-vault --rebuild
+python3 -m obsidian_knowledge_ingestor.cli build-qa --scope linlin --vault ~/Documents/oki-main-vault --rebuild
 ```
 
 Ask in default `map` mode:
 
 ```bash
-python3 -m obsidian_knowledge_ingestor.cli ask '感到无聊老想出去玩social是对的吗' --scope linlin --vault /Users/haoyuebai/Documents/oki-main-vault --context-mode map
+python3 -m obsidian_knowledge_ingestor.cli ask '感到无聊老想出去玩social是对的吗' --scope linlin --vault ~/Documents/oki-main-vault --context-mode map
 ```
 
 Ask in higher-cost `fulltext` mode:
 
 ```bash
-python3 -m obsidian_knowledge_ingestor.cli ask '感到无聊老想出去玩social是对的吗' --scope linlin --vault /Users/haoyuebai/Documents/oki-main-vault --context-mode fulltext
+python3 -m obsidian_knowledge_ingestor.cli ask '感到无聊老想出去玩social是对的吗' --scope linlin --vault ~/Documents/oki-main-vault --context-mode fulltext
 ```
 
 What you should expect at runtime:
@@ -264,7 +264,7 @@ The generated files are split by responsibility:
 To reduce repeated command typing in this workspace, the repository now defaults to:
 - `--scope linlin` for `build-qa`, `qa-search`, `qa-open-derived`, and `ask`
 - `--context-mode map` for `ask`
-- `OBSIDIAN_VAULT_PATH=/Users/haoyuebai/Documents/oki-main-vault` when the environment variable is not set
+- `OBSIDIAN_VAULT_PATH=~/Documents/oki-main-vault` when the environment variable is not set
 
 That means the common local workflow can now be shortened to:
 

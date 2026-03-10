@@ -177,7 +177,7 @@ Current CLI commands:
 For this local repository setup, the CLI now also assumes a few defaults to reduce repetitive typing:
 - default scope: `linlin`
 - default `oki ask` context mode: `map`
-- default vault: `/Users/haoyuebai/Documents/oki-main-vault`, unless `OBSIDIAN_VAULT_PATH` is explicitly set
+- default vault: `~/Documents/oki-main-vault`, unless `OBSIDIAN_VAULT_PATH` is explicitly set
 
 That means many common local commands can now be shortened to:
 - `python3 -m obsidian_knowledge_ingestor.cli build-qa --rebuild`

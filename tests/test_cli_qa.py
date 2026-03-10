@@ -16,7 +16,7 @@ class CliQaTests(unittest.TestCase):
     def test_app_config_uses_repo_default_vault_path(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             config = AppConfig.from_env()
-        self.assertEqual(config.vault_path, Path(DEFAULT_OBSIDIAN_VAULT_PATH))
+        self.assertEqual(config.vault_path, Path(DEFAULT_OBSIDIAN_VAULT_PATH).expanduser())
 
     def test_ask_parser_defaults_scope_context_and_vault_help(self) -> None:
         parser = build_parser()
@@ -30,8 +30,7 @@ class CliQaTests(unittest.TestCase):
                 parser.parse_args(["ask", "--help"])
         help_text = stdout.getvalue()
         self.assertIn("linlin", help_text)
-        self.assertIn("/Users/haoyuebai/Documents/oki-", help_text)
-        self.assertIn("main-vault", help_text)
+        self.assertIn(DEFAULT_OBSIDIAN_VAULT_PATH, help_text)
 
     def test_build_qa_command_prints_manifest_json(self) -> None:
         manifest = DerivedScopeManifest(

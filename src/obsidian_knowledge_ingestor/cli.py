@@ -43,6 +43,10 @@ DEFAULT_SCOPE_ID = "linlin"
 DEFAULT_CONTEXT_MODE = "map"
 
 
+def _vault_help_text() -> str:
+    return f"Override Obsidian vault path (default: {DEFAULT_OBSIDIAN_VAULT_PATH})"
+
+
 def _strip_frontmatter(text: str) -> str:
     if not text.startswith("---\n"):
         return text
@@ -97,12 +101,12 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_parser = subparsers.add_parser("ingest", help="Ingest content from a supported source")
     ingest_parser.add_argument("source", choices=["zhihu", "wechat"])
     ingest_parser.add_argument("--target", required=True, help="Path to source target JSON")
-    ingest_parser.add_argument("--vault", help="Override Obsidian vault path")
+    ingest_parser.add_argument("--vault", help=_vault_help_text())
 
     verify_parser = subparsers.add_parser("verify", help="Verify ingestion counts against source-visible counts")
     verify_parser.add_argument("source", choices=["zhihu"])
     verify_parser.add_argument("--target", required=True, help="Path to source target JSON")
-    verify_parser.add_argument("--vault", help="Override Obsidian vault path")
+    verify_parser.add_argument("--vault", help=_vault_help_text())
     verify_parser.add_argument("--out", help="Optional JSON report output path")
 
     discover_parser = subparsers.add_parser("discover", help="Discover source URLs without ingesting content")
@@ -112,33 +116,33 @@ def build_parser() -> argparse.ArgumentParser:
 
     search_parser = subparsers.add_parser("search", help="Search the Obsidian vault via official CLI")
     search_parser.add_argument("query")
-    search_parser.add_argument("--vault")
+    search_parser.add_argument("--vault", help=_vault_help_text())
 
     read_parser = subparsers.add_parser("read", help="Read a vault note via official CLI")
     read_parser.add_argument("path")
-    read_parser.add_argument("--vault")
+    read_parser.add_argument("--vault", help=_vault_help_text())
     read_parser.add_argument("--body-only", action="store_true")
 
     build_qa_parser = subparsers.add_parser("build-qa", help="Build a derived QA package for a scope")
     build_qa_parser.add_argument("--scope", default=DEFAULT_SCOPE_ID, help=f"Scope id (default: {DEFAULT_SCOPE_ID})")
-    build_qa_parser.add_argument("--vault")
+    build_qa_parser.add_argument("--vault", help=_vault_help_text())
     build_qa_parser.add_argument("--rebuild", action="store_true")
 
     qa_search_parser = subparsers.add_parser("qa-search", help="Search raw scope notes through the official Obsidian CLI")
     qa_search_parser.add_argument("--scope", default=DEFAULT_SCOPE_ID, help=f"Scope id (default: {DEFAULT_SCOPE_ID})")
     qa_search_parser.add_argument("--query", required=True)
-    qa_search_parser.add_argument("--vault")
+    qa_search_parser.add_argument("--vault", help=_vault_help_text())
     qa_search_parser.add_argument("--limit", type=int, default=8)
 
     qa_read_parser = subparsers.add_parser("qa-read", help="Read a note path through the official Obsidian CLI")
     qa_read_parser.add_argument("--path", required=True)
-    qa_read_parser.add_argument("--vault")
+    qa_read_parser.add_argument("--vault", help=_vault_help_text())
     qa_read_parser.add_argument("--body-only", action="store_true")
 
     qa_open_parser = subparsers.add_parser("qa-open-derived", help="Read a derived scope note through the official Obsidian CLI")
     qa_open_parser.add_argument("--scope", default=DEFAULT_SCOPE_ID, help=f"Scope id (default: {DEFAULT_SCOPE_ID})")
     qa_open_parser.add_argument("--kind", required=True, choices=["overview", "themes", "corpus_index", "full_context", "manifest"])
-    qa_open_parser.add_argument("--vault")
+    qa_open_parser.add_argument("--vault", help=_vault_help_text())
     qa_open_parser.add_argument("--body-only", action="store_true")
 
     ask_parser = subparsers.add_parser("ask", help="Run agentic Q&A against a scope")
@@ -152,7 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ask_parser.add_argument("--agent", choices=["codex", "none"], default="codex")
     ask_parser.add_argument("--json", action="store_true")
-    ask_parser.add_argument("--vault", help=f"Vault path (default: {DEFAULT_OBSIDIAN_VAULT_PATH})")
+    ask_parser.add_argument("--vault", help=_vault_help_text())
 
     return parser
 

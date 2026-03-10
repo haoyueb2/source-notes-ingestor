@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-DEFAULT_OBSIDIAN_VAULT_PATH = "/Users/haoyuebai/Documents/oki-main-vault"
+DEFAULT_OBSIDIAN_VAULT_PATH = "~/Documents/oki-main-vault"
 
 
 @dataclass(slots=True)

@@ -187,7 +187,7 @@ Vault 目录结构固定为：
 当前仓库本地开发环境还约定了几个默认值，目的是减少重复输入：
 - 默认 `scope`：`linlin`
 - `oki ask` 默认 `context_mode`：`map`
-- 默认 Vault：`/Users/haoyuebai/Documents/oki-main-vault`，除非环境变量 `OBSIDIAN_VAULT_PATH` 显式覆盖
+- 默认 Vault：`~/Documents/oki-main-vault`，除非环境变量 `OBSIDIAN_VAULT_PATH` 显式覆盖
 
 所以在这个仓库里，很多常用命令可以简化成：
 - `python3 -m obsidian_knowledge_ingestor.cli build-qa --rebuild`
