@@ -99,9 +99,14 @@ class CliQaTests(unittest.TestCase):
             self.assertEqual(stdout.getvalue(), "")
             logs = list((state / "ask_logs").glob("*.log"))
             self.assertEqual(len(logs), 1)
+            answers = list((state / "ask_logs").glob("*.md"))
+            self.assertEqual(len(answers), 1)
+            self.assertEqual(answers[0].read_text(encoding="utf-8"), bundle.answer_markdown)
             log_text = logs[0].read_text(encoding="utf-8")
             self.assertIn("[oki ask] log file:", log_text)
             self.assertIn(str(logs[0]), log_text)
+            self.assertIn("[oki ask] answer file:", log_text)
+            self.assertIn(str(answers[0]), log_text)
 
     def test_ask_command_falls_back_to_final_print_and_logs_answer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -128,8 +133,12 @@ class CliQaTests(unittest.TestCase):
             self.assertIn("## Answer", stdout.getvalue())
             logs = list((state / "ask_logs").glob("*.log"))
             self.assertEqual(len(logs), 1)
+            answers = list((state / "ask_logs").glob("*.md"))
+            self.assertEqual(len(answers), 1)
+            self.assertEqual(answers[0].read_text(encoding="utf-8"), bundle.answer_markdown)
             log_text = logs[0].read_text(encoding="utf-8")
             self.assertIn("## Answer", log_text)
+            self.assertIn("[oki ask] answer file:", log_text)
 
 
 if __name__ == "__main__":

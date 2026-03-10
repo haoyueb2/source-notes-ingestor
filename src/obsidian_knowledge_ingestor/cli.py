@@ -77,6 +77,16 @@ def _default_ask_log_path(config: AppConfig, scope: str) -> Path:
     return logs_dir / f"{timestamp}-{slugify(scope)}.log"
 
 
+def _answer_path_for_log(log_path: Path) -> Path:
+    return log_path.with_suffix(".md")
+
+
+def _write_ask_answer(log_path: Path, answer_markdown: str) -> Path:
+    answer_path = _answer_path_for_log(log_path)
+    answer_path.write_text(answer_markdown, encoding="utf-8")
+    return answer_path
+
+
 @contextlib.contextmanager
 def _ask_logging_context(config: AppConfig, scope: str):
     log_path = _default_ask_log_path(config, scope)
@@ -371,7 +381,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 print(payload)
                 return 0
-            with _ask_logging_context(config, args.scope):
+            with _ask_logging_context(config, args.scope) as log_path:
                 bundle = ask_scope(
                     args.prompt,
                     args.scope,
@@ -380,10 +390,12 @@ def main(argv: list[str] | None = None) -> int:
                     agent=args.agent,
                     stream_final_answer=not args.json,
                 )
+                answer_path = _write_ask_answer(log_path, bundle.answer_markdown)
                 if args.json:
                     print(json.dumps(asdict(bundle), ensure_ascii=False, indent=2))
                 elif not bundle.answer_streamed:
                     print(bundle.answer_markdown, end="" if bundle.answer_markdown.endswith("\n") else "\n")
+                print(f"[oki ask] answer file: {answer_path}", file=sys.stderr)
             return 0
     except (ObsidianCliUnavailableError, CodexCliUnavailableError, RuntimeError, FileNotFoundError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
