@@ -12,7 +12,7 @@ from pathlib import Path
 
 from .browser_automation import BrowserAutomationError, default_storage_state_path, default_user_data_dir, save_login_session
 from .qa_builder import CodexUnavailableError, build_scope_package
-from .config import AppConfig, load_target
+from .config import AppConfig, DEFAULT_OBSIDIAN_VAULT_PATH, load_target
 from .pipeline import IngestReport, ingest_source
 from .qa_runner import (
     CodexCliUnavailableError,
@@ -39,6 +39,8 @@ WECHAT_VERIFICATION_MARKERS = (
     "Complete the human verification",
 )
 WECHAT_DISABLE_RETRY_ENV = "OKI_WECHAT_DISABLE_RETRY"
+DEFAULT_SCOPE_ID = "linlin"
+DEFAULT_CONTEXT_MODE = "map"
 
 
 def _strip_frontmatter(text: str) -> str:
@@ -118,12 +120,12 @@ def build_parser() -> argparse.ArgumentParser:
     read_parser.add_argument("--body-only", action="store_true")
 
     build_qa_parser = subparsers.add_parser("build-qa", help="Build a derived QA package for a scope")
-    build_qa_parser.add_argument("--scope", required=True)
+    build_qa_parser.add_argument("--scope", default=DEFAULT_SCOPE_ID, help=f"Scope id (default: {DEFAULT_SCOPE_ID})")
     build_qa_parser.add_argument("--vault")
     build_qa_parser.add_argument("--rebuild", action="store_true")
 
     qa_search_parser = subparsers.add_parser("qa-search", help="Search raw scope notes through the official Obsidian CLI")
-    qa_search_parser.add_argument("--scope", required=True)
+    qa_search_parser.add_argument("--scope", default=DEFAULT_SCOPE_ID, help=f"Scope id (default: {DEFAULT_SCOPE_ID})")
     qa_search_parser.add_argument("--query", required=True)
     qa_search_parser.add_argument("--vault")
     qa_search_parser.add_argument("--limit", type=int, default=8)
@@ -134,18 +136,23 @@ def build_parser() -> argparse.ArgumentParser:
     qa_read_parser.add_argument("--body-only", action="store_true")
 
     qa_open_parser = subparsers.add_parser("qa-open-derived", help="Read a derived scope note through the official Obsidian CLI")
-    qa_open_parser.add_argument("--scope", required=True)
+    qa_open_parser.add_argument("--scope", default=DEFAULT_SCOPE_ID, help=f"Scope id (default: {DEFAULT_SCOPE_ID})")
     qa_open_parser.add_argument("--kind", required=True, choices=["overview", "themes", "corpus_index", "full_context", "manifest"])
     qa_open_parser.add_argument("--vault")
     qa_open_parser.add_argument("--body-only", action="store_true")
 
     ask_parser = subparsers.add_parser("ask", help="Run agentic Q&A against a scope")
     ask_parser.add_argument("prompt")
-    ask_parser.add_argument("--scope", required=True)
-    ask_parser.add_argument("--context-mode", choices=["map", "fulltext"], default="map")
+    ask_parser.add_argument("--scope", default=DEFAULT_SCOPE_ID, help=f"Scope id (default: {DEFAULT_SCOPE_ID})")
+    ask_parser.add_argument(
+        "--context-mode",
+        choices=["map", "fulltext"],
+        default=DEFAULT_CONTEXT_MODE,
+        help=f"Retrieval context mode (default: {DEFAULT_CONTEXT_MODE})",
+    )
     ask_parser.add_argument("--agent", choices=["codex", "none"], default="codex")
     ask_parser.add_argument("--json", action="store_true")
-    ask_parser.add_argument("--vault")
+    ask_parser.add_argument("--vault", help=f"Vault path (default: {DEFAULT_OBSIDIAN_VAULT_PATH})")
 
     return parser
 

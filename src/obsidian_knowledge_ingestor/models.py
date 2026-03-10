@@ -98,3 +98,4 @@ class AskResultBundle:
     context_mode: str
     agent: str
     answer_markdown: str
+    answer_streamed: bool = False

@@ -2,11 +2,19 @@
 
 A local-first ingestion pipeline for collecting Zhihu and WeChat content, normalizing it into Markdown, storing it inside an Obsidian vault, and querying the vault through the official Obsidian CLI.
 
+This repository is also a learning project. The code and docs are written to be useful for study, not just execution. That means the documentation intentionally explains tradeoffs, boundaries, and failure modes in more detail than a minimal production README.
+
 ## Docs
 - [Technical Guide (English)](docs/technical.md)
 - [技术文档（中文）](docs/technical.zh-CN.md)
 - [Architecture](docs/architecture.md)
 - [Delivery Plan](docs/plan.md)
+
+If you are reading this repository to learn:
+- start with `README.md` for the end-to-end workflow
+- then read `docs/technical.zh-CN.md` or `docs/technical.md` for implementation reasoning
+- then inspect `src/obsidian_knowledge_ingestor/` module by module
+- finally use `tests/` to understand the intended behavior boundaries
 
 ## What is implemented now
 - A runnable Python package and CLI: `oki`
@@ -203,7 +211,7 @@ python3 -m obsidian_knowledge_ingestor.cli ask '感到无聊老想出去玩socia
 What you should expect at runtime:
 - `build-qa` streams Codex output when `OKI_CODEX_STREAM=1`, so you can watch the overview/theme generation live.
 - `oki ask` prints retrieval progress such as `[oki ask] planning retrieval` and `[oki ask] searching ...`.
-- The final long-form answer is emitted once, after the raw evidence bundle has been collected and synthesized.
+- In normal terminal mode, `oki ask` now streams the final long-form answer without printing it twice.
 - `map` mode preloads `overview` and `themes`, then retrieves raw notes.
 - If the first retrieval pass is too thin, `map` mode retries planning with a compact `corpus_index` fallback.
 - `fulltext` mode additionally preloads a truncated `full_context` extract, so it is materially more expensive in prompt size.
@@ -252,9 +260,24 @@ The generated files are split by responsibility:
 - WeChat ingestion writes notes incrementally and relies on `Sources/_state` to resume after verification walls or process interruptions.
 - The vault remains the only agent-facing source of truth.
 
+## Local defaults for this repo
+To reduce repeated command typing in this workspace, the repository now defaults to:
+- `--scope linlin` for `build-qa`, `qa-search`, `qa-open-derived`, and `ask`
+- `--context-mode map` for `ask`
+- `OBSIDIAN_VAULT_PATH=/Users/haoyuebai/Documents/oki-main-vault` when the environment variable is not set
+
+That means the common local workflow can now be shortened to:
+
+```bash
+python3 -m obsidian_knowledge_ingestor.cli build-qa --rebuild
+python3 -m obsidian_knowledge_ingestor.cli ask '感到无聊老想出去玩social是对的吗'
+```
+
+You can still override any of these defaults explicitly with CLI flags or environment variables.
+
 ## QA cost notes
 - The tested serious-answer flow that asked `感到无聊老想出去玩social是对的吗` was run in `--context-mode map`, not `fulltext`.
 - One measured successful run used `35,623` tokens total across the planning stage and final synthesis stage.
-- A later stabilized rerun used the same `map` path, with planning alone at `28,930` tokens; the final synthesis stage was non-streamed, so the exact total for that rerun was not exposed by the local CLI.
+- A later stabilized rerun used the same `map` path, with planning alone at `28,930` tokens; that number was recorded before the current streamed-final-answer path was added.
 - Those numbers were recorded before the lighter `map` planning change that removed default `corpus_index` preload and compacted the generated corpus index.
 - This repository does not know how to map local Codex token usage to an exact percentage of a 5-hour quota. The local CLI exposes per-run token counts, but not the quota denominator.

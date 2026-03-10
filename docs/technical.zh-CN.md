@@ -9,6 +9,17 @@
 
 这个项目的重点不是“炫技爬虫”，而是稳定边界、可验证结果和可持续迭代。
 
+同时，这也是一个学习项目。文档不只追求“告诉你怎么跑起来”，也会尽量解释：
+- 为什么边界要这么切
+- 为什么某些实现看起来不够优雅但更稳定
+- 当前方案到底解决了什么、没解决什么
+
+如果你是为了学习这个项目，推荐阅读顺序是：
+1. 先看 `README.md`，建立端到端流程概念。
+2. 再看本文，理解实现取舍和运行边界。
+3. 然后按模块读 `src/obsidian_knowledge_ingestor/`。
+4. 最后对照 `tests/` 看哪些行为被当成正式契约。
+
 ## 技术栈
 - 运行时：Python 3
 - 包管理：`pyproject.toml`
@@ -173,6 +184,17 @@ Vault 目录结构固定为：
 - `oki qa-open-derived --scope <scope_id> --kind <kind>`
 - `oki ask <prompt> --scope <scope_id>`
 
+当前仓库本地开发环境还约定了几个默认值，目的是减少重复输入：
+- 默认 `scope`：`linlin`
+- `oki ask` 默认 `context_mode`：`map`
+- 默认 Vault：`/Users/haoyuebai/Documents/oki-main-vault`，除非环境变量 `OBSIDIAN_VAULT_PATH` 显式覆盖
+
+所以在这个仓库里，很多常用命令可以简化成：
+- `python3 -m obsidian_knowledge_ingestor.cli build-qa --rebuild`
+- `python3 -m obsidian_knowledge_ingestor.cli ask '感到无聊老想出去玩social是对的吗'`
+
+如果你在别的机器或别的 Vault 中使用，仍然建议显式传参，避免把本地默认值误带到别的环境。
+
 ## 问答层实现
 当前问答层仍然是 agentic 的，但 live 检索执行已经不再完全放给 Codex 自己乱跑：
 1. `oki build-qa` 先为人物级 `scope` 生成派生包。
@@ -236,11 +258,12 @@ Vault 目录结构固定为：
 当前行为是：
 - `build-qa` 默认流式输出 Codex 过程
 - `oki ask` 的“检索计划生成阶段”是流式的
+- 普通终端模式下，`oki ask` 的最终回答阶段也会流式输出
 - `oki ask` 还会输出确定性的进度日志，例如：
   - `[oki ask] planning retrieval`
   - `[oki ask] searching <query>`
   - `[oki ask] synthesizing final answer`
-- 最终回答阶段被故意收口成只打印一次，避免整段答案重复输出
+- `oki ask --json` 仍保持最终回答阶段非流式，避免把正文和 JSON 混在一起
 
 ### Context mode
 `oki ask` 当前支持两种上下文模式。
@@ -283,7 +306,7 @@ Vault 目录结构固定为：
 可确认的 token 用量：
 - 一次成功 run 明确测到总共 `35,623` tokens
 - 后续稳定化后的 rerun，planning 阶段明确看到 `28,930` tokens
-- 但 final synthesis 因为是 non-stream capture，CLI 没额外暴露那一段的 token 数
+- 这组 `28,930` 的记录来自旧版实现，当时还没有现在这条“最终回答流式输出”的路径
 - 上面的数字来自旧版 `map` 路径；当前实现已经去掉默认 `corpus_index` 预加载，并把 `build-qa` 生成的 `corpus_index` 收紧成轻量索引
 
 目前项目拿不到 Codex 5 小时滚动额度的总 denominator，所以不能把这次 run 的 token 数可靠地换算成“用了额度的百分之多少”。

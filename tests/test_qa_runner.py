@@ -1,6 +1,8 @@
 import json
+import io
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +16,7 @@ from obsidian_knowledge_ingestor.qa_runner import (
     _normalize_query_plan,
     _obsidian_binary,
     _parse_codex_usage,
+    _run_codex_markdown_streaming,
     ask_scope,
     search,
     search_scope,
@@ -242,16 +245,26 @@ This line discusses deep thought and reflective practice.
 
             def fake_markdown(prompt, extra_dirs, scopes_dir=None, stream_output=None):
                 captured["synthesis_prompt"] = prompt
+                captured["stream_output"] = stream_output
                 return "## Analysis Trace\n\ntrace\n\n## Answer\n\nanswer\n\n## Citations\n\n- Sources/Zhihu/demo/answers/example.md\n"
 
             with patch("obsidian_knowledge_ingestor.qa_runner._run_codex_json", side_effect=fake_plan):
                 with patch("obsidian_knowledge_ingestor.qa_runner.search_scope", side_effect=fake_search_scope):
                     with patch("obsidian_knowledge_ingestor.qa_runner.read_note", side_effect=fake_read):
                         with patch("obsidian_knowledge_ingestor.qa_runner._run_codex_markdown", side_effect=fake_markdown):
-                            bundle = ask_scope("他怎么看成长?", "demo", vault, context_mode="map", scopes_dir=scopes)
+                            bundle = ask_scope(
+                                "他怎么看成长?",
+                                "demo",
+                                vault,
+                                context_mode="map",
+                                scopes_dir=scopes,
+                                stream_final_answer=True,
+                            )
 
         self.assertEqual(bundle.scope_id, "demo")
+        self.assertTrue(bundle.answer_streamed)
         self.assertIn("## Analysis Trace", bundle.answer_markdown)
+        self.assertTrue(captured["stream_output"])
         planning_prompt = str(captured["planning_prompt"])
         synthesis_prompt = str(captured["synthesis_prompt"])
         self.assertIn("Your job is to produce a high-quality retrieval plan", planning_prompt)
@@ -261,6 +274,62 @@ This line discusses deep thought and reflective practice.
         self.assertIn("Raw evidence bundle:", synthesis_prompt)
         self.assertIn("Sources/Zhihu/demo/answers/example.md", synthesis_prompt)
         self.assertIn("Question reframing:", synthesis_prompt)
+
+    def test_run_codex_markdown_streaming_prints_first_answer_only(self) -> None:
+        stdout = io.StringIO()
+
+        class FakePipe:
+            def __init__(self, lines: list[str]) -> None:
+                self._lines = lines
+
+            def __iter__(self):
+                return iter(self._lines)
+
+            def read(self) -> str:
+                return ""
+
+        class FakeStdin:
+            def __init__(self) -> None:
+                self.buffer = ""
+
+            def write(self, text: str) -> int:
+                self.buffer += text
+                return len(text)
+
+            def close(self) -> None:
+                return None
+
+        class FakePopen:
+            def __init__(self, *args, **kwargs) -> None:
+                self.stdin = FakeStdin()
+                self.stdout = FakePipe(
+                    [
+                        "OpenAI Codex v0.103.0 (research preview)\n",
+                        "--------\n",
+                        "codex\n",
+                        "## Answer\n",
+                        "\n",
+                        "line 1\n",
+                        "line 2\n",
+                        "## Answer\n",
+                        "\n",
+                        "line 1\n",
+                        "line 2\n",
+                        "tokens used\n",
+                        "123\n",
+                    ]
+                )
+                self.stderr = FakePipe([])
+
+            def wait(self) -> int:
+                return 0
+
+        with patch("obsidian_knowledge_ingestor.qa_runner.subprocess.Popen", return_value=FakePopen()):
+            with redirect_stdout(stdout):
+                result = _run_codex_markdown_streaming(["codex", "exec"], "prompt", Path("/tmp"), {})
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(stdout.getvalue(), "## Answer\n\nline 1\nline 2\n")
 
     def test_ask_scope_retries_map_planning_with_compact_corpus_index_when_evidence_is_thin(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

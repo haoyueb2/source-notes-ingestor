@@ -9,6 +9,14 @@
 
 The project is intentionally practical. It favors stable boundaries and observable behavior over crawler cleverness.
 
+It is also a learning project. The docs are intentionally somewhat more detailed than a minimal runbook, because part of the value of this repository is understanding why specific boundaries and tradeoffs exist.
+
+Suggested reading order for learning:
+1. Read `README.md` for the end-to-end workflow.
+2. Read this guide for implementation tradeoffs and runtime boundaries.
+3. Inspect `src/obsidian_knowledge_ingestor/` module by module.
+4. Use `tests/` to see which behaviors are treated as contracts.
+
 ## Technology Stack
 - Runtime: Python 3
 - Packaging: `pyproject.toml`
@@ -166,6 +174,17 @@ Current CLI commands:
 - `oki qa-open-derived --scope <scope_id> --kind <kind>`
 - `oki ask <prompt> --scope <scope_id>`
 
+For this local repository setup, the CLI now also assumes a few defaults to reduce repetitive typing:
+- default scope: `linlin`
+- default `oki ask` context mode: `map`
+- default vault: `/Users/haoyuebai/Documents/oki-main-vault`, unless `OBSIDIAN_VAULT_PATH` is explicitly set
+
+That means many common local commands can now be shortened to:
+- `python3 -m obsidian_knowledge_ingestor.cli build-qa --rebuild`
+- `python3 -m obsidian_knowledge_ingestor.cli ask '感到无聊老想出去玩social是对的吗'`
+
+For other machines or vaults, explicit flags are still preferable so the local repo defaults do not leak into a different environment.
+
 ## QA Layer
 The QA layer is agentic, but the live retrieval loop is no longer delegated blindly to Codex:
 1. `oki build-qa` builds a person-level scope package.
@@ -230,11 +249,12 @@ The QA layer uses `OKI_CODEX_STREAM` to control Codex subprocess streaming.
 Current behavior:
 - `build-qa` streams Codex output by default
 - `oki ask` streams the retrieval-planning phase
+- `oki ask` also streams the final answer in normal terminal mode
 - `oki ask` also prints deterministic progress logs such as:
   - `[oki ask] planning retrieval`
   - `[oki ask] searching <query>`
   - `[oki ask] synthesizing final answer`
-- final answer synthesis is intentionally captured and printed once at the end, so the answer is not duplicated
+- `oki ask --json` keeps final answer synthesis non-streamed so the JSON payload stays clean
 
 ### Context modes
 `oki ask` currently supports two context modes.
@@ -276,7 +296,7 @@ Execution mode:
 
 Observed token usage:
 - one measured successful run: `35,623` total tokens
-- a later stabilized rerun exposed `28,930` planning tokens, but the final non-streamed synthesis stage did not expose its own count through the local CLI
+- a later stabilized rerun exposed `28,930` planning tokens; that measurement was recorded before the current streamed-final-answer path was added
 - those numbers were recorded before the lighter `map` planning change that removed default `corpus_index` preload
 
 This project does not currently know the denominator for Codex's rolling 5-hour quota, so it cannot convert those run totals into a trustworthy percentage.
