@@ -81,6 +81,13 @@ class DerivedScopeManifest:
 
 
 @dataclass(slots=True)
+class AskUsage:
+    input_tokens: int = 0
+    cached_input_tokens: int = 0
+    output_tokens: int = 0
+
+
+@dataclass(slots=True)
 class EvidenceItem:
     path: str
     title: str
@@ -92,6 +99,36 @@ class EvidenceItem:
 
 
 @dataclass(slots=True)
+class AskTurn:
+    turn_id: str
+    parent_turn_id: str | None
+    created_at: str
+    user_prompt: str
+    question_reframing: str
+    query_plan: list[dict[str, str]] = field(default_factory=list)
+    query_runs: list[dict[str, object]] = field(default_factory=list)
+    evidence_bundle: list[dict[str, object]] = field(default_factory=list)
+    answer_markdown_path: str | None = None
+    answer_markdown: str | None = None
+    usage: AskUsage = field(default_factory=AskUsage)
+    used_retrieval: bool = True
+    retrieval_reason: str | None = None
+
+
+@dataclass(slots=True)
+class AskSession:
+    session_id: str
+    scope_id: str
+    context_mode: str
+    agent: str
+    created_at: str
+    updated_at: str
+    turns: list[AskTurn] = field(default_factory=list)
+    title: str | None = None
+    source_answer_path: str | None = None
+
+
+@dataclass(slots=True)
 class AskResultBundle:
     prompt: str
     scope_id: str
@@ -99,3 +136,14 @@ class AskResultBundle:
     agent: str
     answer_markdown: str
     answer_streamed: bool = False
+    session_id: str | None = None
+    turn_id: str | None = None
+    used_retrieval: bool = True
+    usage: AskUsage = field(default_factory=AskUsage)
+    answer_markdown_path: str | None = None
+    evidence_paths: list[str] = field(default_factory=list)
+    question_reframing: str | None = None
+    query_plan: list[dict[str, str]] = field(default_factory=list)
+    query_runs: list[dict[str, object]] = field(default_factory=list)
+    evidence_bundle: list[dict[str, object]] = field(default_factory=list)
+    retrieval_reason: str | None = None

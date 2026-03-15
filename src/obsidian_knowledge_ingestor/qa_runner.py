@@ -10,10 +10,11 @@ import sys
 import tempfile
 import time
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 
-from .models import AskResultBundle, EvidenceItem, QueryResult
+from .models import AskResultBundle, AskSession, AskTurn, AskUsage, EvidenceItem, QueryResult
 from .scope_loader import default_scopes_dir, derived_scope_dir, load_scope, project_root
 
 
@@ -405,6 +406,66 @@ def _usage_text(usage: CodexUsage) -> str:
     )
 
 
+def _plan_schema() -> dict[str, object]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["question_reframing", "query_plan"],
+        "properties": {
+            "question_reframing": {"type": "string"},
+            "query_plan": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["query", "bucket", "why"],
+                    "properties": {
+                        "query": {"type": "string"},
+                        "bucket": {"type": "string"},
+                        "why": {"type": "string"},
+                    },
+                },
+            },
+        },
+    }
+
+
+def _follow_up_schema() -> dict[str, object]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["needs_retrieval", "reason", "carry_over_paths", "follow_up_query_plan"],
+        "properties": {
+            "needs_retrieval": {"type": "boolean"},
+            "reason": {"type": "string"},
+            "carry_over_paths": {"type": "array", "items": {"type": "string"}},
+            "follow_up_query_plan": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["query", "bucket", "why"],
+                    "properties": {
+                        "query": {"type": "string"},
+                        "bucket": {"type": "string"},
+                        "why": {"type": "string"},
+                    },
+                },
+            },
+        },
+    }
+
+
+def _usage_to_model(usage: CodexUsage | None) -> AskUsage:
+    if usage is None:
+        return AskUsage()
+    return AskUsage(
+        input_tokens=usage.input_tokens,
+        cached_input_tokens=usage.cached_input_tokens,
+        output_tokens=usage.output_tokens,
+    )
+
+
 def _run_codex_json(
     prompt: str,
     schema: dict[str, object],
@@ -701,6 +762,65 @@ def _build_retrieval_plan_prompt(
     return "\n".join(lines)
 
 
+def _extract_answer_section(markdown: str) -> str:
+    match = re.search(r"^## Answer\s*$", markdown, flags=re.MULTILINE)
+    if not match:
+        return markdown.strip()
+    tail = markdown[match.end():]
+    citation_match = re.search(r"^## Citations\s*$", tail, flags=re.MULTILINE)
+    if citation_match:
+        tail = tail[:citation_match.start()]
+    return tail.strip()
+
+
+def _compact_turn_summary(turn: AskTurn) -> str:
+    answer = _truncate_for_prompt(_extract_answer_section(turn.answer_markdown or ""), 1200)
+    evidence_lines = [
+        f"- `{record.get('path', '')}` via {', '.join(record.get('queries', []))}"
+        for record in turn.evidence_bundle[:6]
+        if record.get("path")
+    ]
+    parts = [
+        f"Turn id: {turn.turn_id}",
+        f"User prompt: {turn.user_prompt}",
+        f"Question reframing: {turn.question_reframing}",
+        "Evidence highlights:",
+        *(evidence_lines or ["- No stored evidence"]),
+        "Previous answer excerpt:",
+        answer or "[empty]",
+    ]
+    return "\n".join(parts)
+
+
+def _build_follow_up_decision_prompt(
+    prompt: str,
+    scope_id: str,
+    context_mode: str,
+    preloaded_context: dict[str, str],
+    recent_turns: list[AskTurn],
+) -> str:
+    lines = [
+        f'You are deciding whether a follow-up question for scope "{scope_id}" needs fresh retrieval.',
+        "Return JSON only.",
+        "",
+        "Decision contract:",
+        "- `needs_retrieval`: true if the follow-up needs new raw-note retrieval beyond prior evidence.",
+        "- `reason`: explain the decision briefly.",
+        "- `carry_over_paths`: raw note paths from prior turns that remain useful.",
+        "- `follow_up_query_plan`: retrieval-friendly query objects only if fresh retrieval is needed; otherwise return an empty array.",
+        "",
+        f"Context mode: {context_mode}",
+        "Use the derived map only as navigation, not final evidence.",
+    ]
+    for kind, body in preloaded_context.items():
+        lines.extend(["", f"### BEGIN {kind.upper()}", body, f"### END {kind.upper()}"])
+    lines.extend(["", "Recent conversation state:"])
+    for turn in recent_turns:
+        lines.extend(["", "### PRIOR TURN", _compact_turn_summary(turn)])
+    lines.extend(["", "New follow-up question:", prompt.strip()])
+    return "\n".join(lines)
+
+
 def _progress(message: str) -> None:
     print(f"[oki ask] {message}", file=sys.stderr)
 
@@ -822,6 +942,59 @@ def _collect_evidence_bundle(
     return query_runs, bundle
 
 
+def _evidence_by_path(turns: list[AskTurn]) -> dict[str, dict[str, object]]:
+    evidence: dict[str, dict[str, object]] = {}
+    for turn in turns:
+        for record in turn.evidence_bundle:
+            path = str(record.get("path") or "").strip()
+            if path:
+                evidence[path] = record
+    return evidence
+
+
+def _select_carry_over_evidence(turns: list[AskTurn], carry_over_paths: list[str]) -> list[dict[str, object]]:
+    prior = _evidence_by_path(turns)
+    selected: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for path in carry_over_paths:
+        record = prior.get(path)
+        if record is None or path in seen:
+            continue
+        selected.append(record)
+        seen.add(path)
+    return selected
+
+
+def _merge_evidence_bundle(
+    carry_over: list[dict[str, object]],
+    fresh: list[dict[str, object]],
+    final_note_limit: int = 8,
+) -> tuple[list[dict[str, object]], int, int]:
+    merged: list[dict[str, object]] = []
+    seen: set[str] = set()
+    reused_count = 0
+    new_count = 0
+    for record in carry_over:
+        path = str(record.get("path") or "").strip()
+        if not path or path in seen:
+            continue
+        merged.append(record)
+        seen.add(path)
+        reused_count += 1
+        if len(merged) >= final_note_limit:
+            return merged[:final_note_limit], reused_count, new_count
+    for record in fresh:
+        path = str(record.get("path") or "").strip()
+        if not path or path in seen:
+            continue
+        merged.append(record)
+        seen.add(path)
+        new_count += 1
+        if len(merged) >= final_note_limit:
+            break
+    return merged[:final_note_limit], reused_count, new_count
+
+
 def _should_retry_with_corpus_index(context_mode: str, bundle: list[dict[str, object]]) -> bool:
     if context_mode != "map":
         return False
@@ -834,6 +1007,7 @@ def _build_synthesis_prompt(
     question_reframing: str,
     query_runs: list[dict[str, object]],
     evidence_bundle: list[dict[str, object]],
+    follow_up_context: str | None = None,
 ) -> str:
     lines = [
         f'You are answering a serious, source-grounded question for the scope "{scope_id}".',
@@ -866,8 +1040,23 @@ def _build_synthesis_prompt(
         "Question reframing:",
         question_reframing,
         "",
-        "Retrieval summary:",
     ]
+    if follow_up_context:
+        lines.extend(
+            [
+                "Follow-up context:",
+                follow_up_context,
+                "",
+                "When the new answer agrees with prior conclusions, say so briefly instead of re-deriving everything.",
+                "When fresh evidence changes or sharpens the prior answer, make that update explicit.",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+        "Retrieval summary:",
+        ]
+    )
     for run in query_runs:
         lines.append(
             f"- query `{run['query']}` ({run['bucket']}): {run['match_count']} matches"
@@ -989,23 +1178,19 @@ def _build_agent_prompt(
     return "\n".join(intro_lines)
 
 
-def ask_scope(
+def _run_ask_scope_core(
     prompt: str,
     scope_id: str,
-    vault_path: str | Path,
-    context_mode: str = "map",
-    agent: str = "codex",
-    scopes_dir: str | Path | None = None,
-    stream_final_answer: bool = False,
+    vault_root: Path,
+    context_mode: str,
+    agent: str,
+    scopes_dir: str | Path | None,
+    stream_final_answer: bool,
+    initial_usage: CodexUsage | None = None,
+    carry_over_evidence: list[dict[str, object]] | None = None,
+    planning_note: str | None = None,
+    follow_up_context: str | None = None,
 ) -> AskResultBundle:
-    vault_root = Path(vault_path).expanduser()
-    if not derived_scope_dir(scope_id, vault_root).exists():
-        raise RuntimeError(f"Derived scope package missing for {scope_id!r}. Run `oki build-qa --scope {scope_id}` first.")
-
-    if scopes_dir is None:
-        scopes_dir = default_scopes_dir()
-    load_scope(scope_id, scopes_dir=scopes_dir)
-
     if agent == "none":
         answer = _build_agent_prompt(prompt, scope_id, context_mode=context_mode, vault_path=vault_root)
         return AskResultBundle(
@@ -1014,34 +1199,22 @@ def ask_scope(
             context_mode=context_mode,
             agent=agent,
             answer_markdown=answer,
+            used_retrieval=False,
         )
 
-    total_usage = CodexUsage()
+    total_usage = initial_usage or CodexUsage()
+    reused_evidence = carry_over_evidence or []
     preloaded_context = _collect_preloaded_context(scope_id, vault_root, context_mode=context_mode)
     _progress("planning retrieval")
     plan_payload = _run_codex_json(
-        _build_retrieval_plan_prompt(prompt, scope_id, context_mode=context_mode, preloaded_context=preloaded_context),
-        schema={
-            "type": "object",
-            "additionalProperties": False,
-            "required": ["question_reframing", "query_plan"],
-            "properties": {
-                "question_reframing": {"type": "string"},
-                "query_plan": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "required": ["query", "bucket", "why"],
-                        "properties": {
-                            "query": {"type": "string"},
-                            "bucket": {"type": "string"},
-                            "why": {"type": "string"},
-                        },
-                    },
-                },
-            },
-        },
+        _build_retrieval_plan_prompt(
+            prompt,
+            scope_id,
+            context_mode=context_mode,
+            preloaded_context=preloaded_context,
+            planning_note=planning_note,
+        ),
+        schema=_plan_schema(),
         extra_dirs=[vault_root],
         scopes_dir=scopes_dir,
         stream_output=True,
@@ -1065,27 +1238,7 @@ def ask_scope(
                     "Use the compact corpus index below only to widen recall and diversify query coverage."
                 ),
             ),
-            schema={
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["question_reframing", "query_plan"],
-                "properties": {
-                    "question_reframing": {"type": "string"},
-                    "query_plan": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "additionalProperties": False,
-                            "required": ["query", "bucket", "why"],
-                            "properties": {
-                                "query": {"type": "string"},
-                                "bucket": {"type": "string"},
-                                "why": {"type": "string"},
-                            },
-                        },
-                    },
-                },
-            },
+            schema=_plan_schema(),
             extra_dirs=[vault_root],
             scopes_dir=scopes_dir,
             stream_output=True,
@@ -1096,9 +1249,19 @@ def ask_scope(
             _progress(f"fallback planning usage: {_usage_text(fallback_usage)}")
         question_reframing, query_plan = _normalize_query_plan(fallback_plan_payload, prompt)
         query_runs, evidence_bundle = _collect_evidence_bundle(scope_id, query_plan, vault_root, scopes_dir=scopes_dir)
+    merged_evidence_bundle, reused_count, new_count = _merge_evidence_bundle(reused_evidence, evidence_bundle)
+    if reused_count or new_count:
+        _progress(f"evidence reuse: reused={reused_count}, new={new_count}")
     _progress("synthesizing final answer")
     answer = _run_codex_markdown(
-        _build_synthesis_prompt(prompt, scope_id, question_reframing, query_runs, evidence_bundle),
+        _build_synthesis_prompt(
+            prompt,
+            scope_id,
+            question_reframing,
+            query_runs,
+            merged_evidence_bundle,
+            follow_up_context=follow_up_context,
+        ),
         extra_dirs=[vault_root],
         scopes_dir=scopes_dir,
         stream_output=stream_final_answer,
@@ -1117,6 +1280,153 @@ def ask_scope(
         agent=agent,
         answer_markdown=answer,
         answer_streamed=answer_streamed,
+        used_retrieval=True,
+        usage=_usage_to_model(total_usage),
+        evidence_paths=[str(record.get("path") or "") for record in merged_evidence_bundle if record.get("path")],
+        question_reframing=question_reframing,
+        query_plan=query_plan,
+        query_runs=query_runs,
+        evidence_bundle=merged_evidence_bundle,
+        retrieval_reason=planning_note,
+    )
+
+
+def ask_scope(
+    prompt: str,
+    scope_id: str,
+    vault_path: str | Path,
+    context_mode: str = "map",
+    agent: str = "codex",
+    scopes_dir: str | Path | None = None,
+    stream_final_answer: bool = False,
+) -> AskResultBundle:
+    vault_root = Path(vault_path).expanduser()
+    if not derived_scope_dir(scope_id, vault_root).exists():
+        raise RuntimeError(f"Derived scope package missing for {scope_id!r}. Run `oki build-qa --scope {scope_id}` first.")
+
+    if scopes_dir is None:
+        scopes_dir = default_scopes_dir()
+    load_scope(scope_id, scopes_dir=scopes_dir)
+
+    return _run_ask_scope_core(
+        prompt,
+        scope_id,
+        vault_root,
+        context_mode,
+        agent,
+        scopes_dir,
+        stream_final_answer,
+    )
+
+
+def ask_scope_with_session(
+    prompt: str,
+    scope_id: str,
+    vault_path: str | Path,
+    session: AskSession | None = None,
+    context_mode: str = "map",
+    agent: str = "codex",
+    scopes_dir: str | Path | None = None,
+    stream_final_answer: bool = False,
+) -> AskResultBundle:
+    vault_root = Path(vault_path).expanduser()
+    if session is None or not session.turns:
+        return ask_scope(
+            prompt,
+            scope_id,
+            vault_root,
+            context_mode=context_mode,
+            agent=agent,
+            scopes_dir=scopes_dir,
+            stream_final_answer=stream_final_answer,
+        )
+
+    if scopes_dir is None:
+        scopes_dir = default_scopes_dir()
+    load_scope(scope_id, scopes_dir=scopes_dir)
+
+    prior_turns = session.turns[-3:]
+    preloaded_context = _collect_preloaded_context(scope_id, vault_root, context_mode=context_mode)
+    _progress("deciding whether follow-up needs retrieval")
+    follow_up_payload = _run_codex_json(
+        _build_follow_up_decision_prompt(prompt, scope_id, context_mode, preloaded_context, prior_turns),
+        schema=_follow_up_schema(),
+        extra_dirs=[vault_root],
+        scopes_dir=scopes_dir,
+        stream_output=True,
+    )
+    follow_up_usage = _consume_last_codex_usage()
+    total_usage = CodexUsage().add(follow_up_usage)
+    if follow_up_usage:
+        _progress(f"follow-up decision usage: {_usage_text(follow_up_usage)}")
+    carry_over_paths = [str(path).strip() for path in follow_up_payload.get("carry_over_paths", []) if str(path).strip()]
+    carry_over_evidence = _select_carry_over_evidence(session.turns, carry_over_paths)
+    reason = str(follow_up_payload.get("reason") or "").strip() or "Follow-up decision did not provide a reason."
+    follow_up_context = "\n\n".join(_compact_turn_summary(turn) for turn in prior_turns)
+    needs_retrieval = bool(follow_up_payload.get("needs_retrieval"))
+    if not needs_retrieval and carry_over_evidence:
+        _progress("follow-up covered by prior evidence; skipping vault retrieval")
+        _progress(f"evidence reuse: reused={len(carry_over_evidence)}, new=0")
+        answer = _run_codex_markdown(
+            _build_synthesis_prompt(
+                prompt,
+                scope_id,
+                str(prior_turns[-1].question_reframing or prompt),
+                [],
+                carry_over_evidence,
+                follow_up_context=follow_up_context,
+            ),
+            extra_dirs=[vault_root],
+            scopes_dir=scopes_dir,
+            stream_output=stream_final_answer,
+        )
+        answer_streamed = _consume_last_codex_streamed_output()
+        synthesis_usage = _consume_last_codex_usage()
+        if synthesis_usage:
+            total_usage = total_usage.add(synthesis_usage)
+            _progress(f"synthesis usage: {_usage_text(synthesis_usage)}")
+        if total_usage.total_tokens:
+            _progress(f"total codex usage: {_usage_text(total_usage)}")
+        return AskResultBundle(
+            prompt=prompt,
+            scope_id=scope_id,
+            context_mode=context_mode,
+            agent=agent,
+            answer_markdown=answer,
+            answer_streamed=answer_streamed,
+            used_retrieval=False,
+            usage=_usage_to_model(total_usage),
+            evidence_paths=[str(record.get("path") or "") for record in carry_over_evidence if record.get("path")],
+            question_reframing=prior_turns[-1].question_reframing,
+            query_plan=[],
+            query_runs=[],
+            evidence_bundle=carry_over_evidence,
+            retrieval_reason=reason,
+        )
+
+    hints = _normalize_query_plan(
+        {
+            "question_reframing": prompt,
+            "query_plan": follow_up_payload.get("follow_up_query_plan") or [],
+        },
+        prompt,
+    )[1]
+    planning_note = f"Follow-up question. Fresh retrieval is needed. Reason: {reason}"
+    if hints:
+        hint_lines = [f"- `{item['query']}` ({item['bucket']}): {item['why']}" for item in hints[:6]]
+        planning_note = f"{planning_note}\nReuse these retrieval hints if they help:\n" + "\n".join(hint_lines)
+    return _run_ask_scope_core(
+        prompt,
+        scope_id,
+        vault_root,
+        context_mode,
+        agent,
+        scopes_dir,
+        stream_final_answer,
+        initial_usage=total_usage,
+        carry_over_evidence=carry_over_evidence,
+        planning_note=planning_note,
+        follow_up_context=follow_up_context,
     )
 
 

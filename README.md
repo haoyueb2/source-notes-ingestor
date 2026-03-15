@@ -175,7 +175,17 @@ oki qa-search --scope linlin --query "成长 自律"
 oki qa-open-derived --scope linlin --kind overview
 oki ask "这个人最近怎么看 AI Agent" --scope linlin
 oki ask "这个人最近怎么看 AI Agent" --scope linlin --context-mode fulltext
+oki ask "那如果是追问她对职业路径的补充呢" --scope linlin --resume
+oki ask "继续追问" --scope linlin --session 20260315-114052-linlin
+oki ask "从这个历史回答继续问" --scope linlin --session ./state/ask_logs/20260315-090910-linlin.md
 ```
+
+Ask session behavior:
+- Each successful `oki ask` run now writes a human-readable answer under `state/ask_answers/<session_id>/<turn_id>.md`.
+- Structured recovery state is stored in `state/ask_sessions/<session_id>.json`.
+- `--resume` continues the latest session for the current scope.
+- `--session` accepts a session id, a session JSON path, or a legacy answer Markdown path.
+- Full debug logs are no longer written by default. Use `--debug-log` or inspect failure logs when troubleshooting.
 
 ## Running the QA layer
 Recommended environment for the local Codex-backed QA flow:

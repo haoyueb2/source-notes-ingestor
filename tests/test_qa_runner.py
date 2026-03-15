@@ -6,7 +6,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from obsidian_knowledge_ingestor.models import EvidenceItem, QueryResult
+from obsidian_knowledge_ingestor.models import AskSession, AskTurn, EvidenceItem, QueryResult
 from obsidian_knowledge_ingestor.qa_runner import (
     ObsidianCliUnavailableError,
     _build_agent_prompt,
@@ -18,6 +18,7 @@ from obsidian_knowledge_ingestor.qa_runner import (
     _parse_codex_usage,
     _run_codex_markdown_streaming,
     ask_scope,
+    ask_scope_with_session,
     search,
     search_scope,
 )
@@ -425,6 +426,151 @@ This line discusses deep thought and reflective practice.
     def test_build_agent_prompt_fulltext_mode_mentions_full_context(self) -> None:
         prompt = _build_agent_prompt("问题", "demo", "fulltext", Path("/vault"))
         self.assertIn("The prompt below already includes overview, themes, and a preloaded full-context extract.", prompt)
+
+    def test_ask_scope_with_session_skips_retrieval_when_prior_evidence_is_enough(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            vault = root / "vault"
+            derived = vault / "Derived" / "Scopes" / "demo"
+            derived.mkdir(parents=True)
+            for name in ["overview.md", "themes.md"]:
+                (derived / name).write_text(f"---\nderived: \"true\"\n---\n# {name}\nbody for {name}\n", encoding="utf-8")
+            scopes = root / "scopes"
+            scopes.mkdir()
+            (scopes / "demo.json").write_text(
+                json.dumps({"scope_id": "demo", "display_name": "Demo", "sources": [{"path": "Sources/Zhihu/demo", "source": "zhihu"}]}),
+                encoding="utf-8",
+            )
+            session = AskSession(
+                session_id="s1",
+                scope_id="demo",
+                context_mode="map",
+                agent="codex",
+                created_at="2026-03-15T00:00:00Z",
+                updated_at="2026-03-15T00:00:00Z",
+                turns=[
+                    AskTurn(
+                        turn_id="turn-0001",
+                        parent_turn_id=None,
+                        created_at="2026-03-15T00:00:00Z",
+                        user_prompt="老问题",
+                        question_reframing="老问题重述",
+                        evidence_bundle=[
+                            {
+                                "path": "Sources/Zhihu/demo/answers/example.md",
+                                "title": "A Note",
+                                "source": "zhihu",
+                                "content_type": "answer",
+                                "queries": ["无聊"],
+                                "snippets": ["old snippet"],
+                                "body_excerpt": "body",
+                            }
+                        ],
+                        answer_markdown="## Answer\n\nold answer\n\n## Citations\n\n- Sources/Zhihu/demo/answers/example.md\n",
+                    )
+                ],
+            )
+
+            with patch(
+                "obsidian_knowledge_ingestor.qa_runner._run_codex_json",
+                return_value={
+                    "needs_retrieval": False,
+                    "reason": "已有证据足够",
+                    "carry_over_paths": ["Sources/Zhihu/demo/answers/example.md"],
+                    "follow_up_query_plan": [],
+                },
+            ):
+                with patch("obsidian_knowledge_ingestor.qa_runner._run_codex_markdown", return_value="## Answer\n\nnew answer\n") as markdown_mock:
+                    result = ask_scope_with_session("追问", "demo", vault, session=session, scopes_dir=scopes)
+
+        self.assertFalse(result.used_retrieval)
+        self.assertEqual(result.evidence_paths, ["Sources/Zhihu/demo/answers/example.md"])
+        self.assertEqual(markdown_mock.call_count, 1)
+
+    def test_ask_scope_with_session_retrieves_when_follow_up_needs_more_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            vault = root / "vault"
+            derived = vault / "Derived" / "Scopes" / "demo"
+            derived.mkdir(parents=True)
+            for name in ["overview.md", "themes.md", "corpus_index.md"]:
+                (derived / name).write_text(f"---\nderived: \"true\"\n---\n# {name}\nbody for {name}\n", encoding="utf-8")
+            scopes = root / "scopes"
+            scopes.mkdir()
+            (scopes / "demo.json").write_text(
+                json.dumps({"scope_id": "demo", "display_name": "Demo", "sources": [{"path": "Sources/Zhihu/demo", "source": "zhihu"}]}),
+                encoding="utf-8",
+            )
+            session = AskSession(
+                session_id="s1",
+                scope_id="demo",
+                context_mode="map",
+                agent="codex",
+                created_at="2026-03-15T00:00:00Z",
+                updated_at="2026-03-15T00:00:00Z",
+                turns=[
+                    AskTurn(
+                        turn_id="turn-0001",
+                        parent_turn_id=None,
+                        created_at="2026-03-15T00:00:00Z",
+                        user_prompt="老问题",
+                        question_reframing="老问题重述",
+                        evidence_bundle=[
+                            {
+                                "path": "Sources/Zhihu/demo/answers/old.md",
+                                "title": "Old Note",
+                                "source": "zhihu",
+                                "content_type": "answer",
+                                "queries": ["旧"],
+                                "snippets": ["old snippet"],
+                                "body_excerpt": "body",
+                            }
+                        ],
+                        answer_markdown="## Answer\n\nold answer\n",
+                    )
+                ],
+            )
+
+            prompts = []
+
+            def fake_json(prompt, schema, extra_dirs, scopes_dir=None, stream_output=None):
+                prompts.append(prompt)
+                if len(prompts) == 1:
+                    return {
+                        "needs_retrieval": True,
+                        "reason": "需要新检索",
+                        "carry_over_paths": ["Sources/Zhihu/demo/answers/old.md"],
+                        "follow_up_query_plan": [{"query": "新主题", "bucket": "follow-up", "why": "补证据"}],
+                    }
+                return {
+                    "question_reframing": "新问题重述",
+                    "query_plan": [{"query": "新主题", "bucket": "follow-up", "why": "补证据"}],
+                }
+
+            def fake_search_scope(scope_id, query, vault_path, scopes_dir=None, limit=8):
+                return [
+                    EvidenceItem(
+                        path="Sources/Zhihu/demo/answers/new.md",
+                        title="New Note",
+                        source="zhihu",
+                        content_type="answer",
+                        snippet="new snippet",
+                        score=9.0,
+                    )
+                ]
+
+            def fake_read(path, vault=None, cwd=None):
+                return QueryResult(command=["obsidian"], stdout=f"---\ntitle: \"{Path(path).stem}\"\n---\n正文", stderr="", returncode=0)
+
+            with patch("obsidian_knowledge_ingestor.qa_runner._run_codex_json", side_effect=fake_json):
+                with patch("obsidian_knowledge_ingestor.qa_runner.search_scope", side_effect=fake_search_scope):
+                    with patch("obsidian_knowledge_ingestor.qa_runner.read_note", side_effect=fake_read):
+                        with patch("obsidian_knowledge_ingestor.qa_runner._run_codex_markdown", return_value="## Answer\n\nnew answer\n"):
+                            result = ask_scope_with_session("追问", "demo", vault, session=session, scopes_dir=scopes)
+
+        self.assertTrue(result.used_retrieval)
+        self.assertIn("Sources/Zhihu/demo/answers/old.md", result.evidence_paths)
+        self.assertIn("Sources/Zhihu/demo/answers/new.md", result.evidence_paths)
 
 
 if __name__ == "__main__":
