@@ -27,6 +27,7 @@ class CodexCliUnavailableError(RuntimeError):
 
 
 PROMPT_CONCEPT_KEYWORDS = [
+    "无聊",
     "失败",
     "内耗",
     "焦虑",
@@ -38,6 +39,9 @@ PROMPT_CONCEPT_KEYWORDS = [
     "硅谷",
     "工作",
     "职业",
+    "加班",
+    "外企",
+    "跳槽",
     "路线",
     "代价",
     "自由",
@@ -78,6 +82,8 @@ QUERY_STOPWORDS = {
 DEFAULT_REASONING_EFFORT = "medium"
 MAP_CORPUS_INDEX_FALLBACK_CHARS = 8000
 MIN_EVIDENCE_NOTES = 4
+FOLLOW_UP_OVERVIEW_CHARS = 12000
+FOLLOW_UP_THEMES_CHARS = 14000
 
 
 @dataclass(slots=True)
@@ -792,11 +798,28 @@ def _compact_turn_summary(turn: AskTurn) -> str:
     return "\n".join(parts)
 
 
+def _minimal_turn_summary(turn: AskTurn) -> str:
+    answer = _truncate_for_prompt(_extract_answer_section(turn.answer_markdown or ""), 360)
+    evidence_lines = [
+        f"- `{record.get('path', '')}` | {', '.join(record.get('queries', [])[:2])}"
+        for record in turn.evidence_bundle[:3]
+        if record.get("path")
+    ]
+    parts = [
+        f"Turn: {turn.turn_id}",
+        f"Prompt: {_truncate_for_prompt(turn.user_prompt, 160)}",
+        f"Reframing: {_truncate_for_prompt(turn.question_reframing, 160)}",
+        "Evidence:",
+        *(evidence_lines or ["- none"]),
+        f"Answer excerpt: {answer or '[empty]'}",
+    ]
+    return "\n".join(parts)
+
+
 def _build_follow_up_decision_prompt(
     prompt: str,
     scope_id: str,
     context_mode: str,
-    preloaded_context: dict[str, str],
     recent_turns: list[AskTurn],
 ) -> str:
     lines = [
@@ -810,13 +833,12 @@ def _build_follow_up_decision_prompt(
         "- `follow_up_query_plan`: retrieval-friendly query objects only if fresh retrieval is needed; otherwise return an empty array.",
         "",
         f"Context mode: {context_mode}",
-        "Use the derived map only as navigation, not final evidence.",
+        "Base the decision mostly on the compact prior-turn summaries below.",
+        "Be conservative: if prior evidence is clearly enough, avoid fresh retrieval.",
     ]
-    for kind, body in preloaded_context.items():
-        lines.extend(["", f"### BEGIN {kind.upper()}", body, f"### END {kind.upper()}"])
     lines.extend(["", "Recent conversation state:"])
     for turn in recent_turns:
-        lines.extend(["", "### PRIOR TURN", _compact_turn_summary(turn)])
+        lines.extend(["", "### PRIOR TURN", _minimal_turn_summary(turn)])
     lines.extend(["", "New follow-up question:", prompt.strip()])
     return "\n".join(lines)
 
@@ -851,10 +873,12 @@ def _collect_preloaded_context(
     context_mode: str,
     *,
     include_corpus_index: bool = False,
+    overview_chars: int = 32000,
+    themes_chars: int = 40000,
 ) -> dict[str, str]:
     preloaded_context = {
-        "overview": _truncate_for_prompt(_read_derived_note_body("overview", scope_id, vault_root), 32000),
-        "themes": _truncate_for_prompt(_read_derived_note_body("themes", scope_id, vault_root), 40000),
+        "overview": _truncate_for_prompt(_read_derived_note_body("overview", scope_id, vault_root), overview_chars),
+        "themes": _truncate_for_prompt(_read_derived_note_body("themes", scope_id, vault_root), themes_chars),
     }
     if context_mode == "fulltext":
         preloaded_context["full_context"] = _truncate_for_prompt(_read_derived_note_body("full_context", scope_id, vault_root), 70000)
@@ -963,6 +987,92 @@ def _select_carry_over_evidence(turns: list[AskTurn], carry_over_paths: list[str
         selected.append(record)
         seen.add(path)
     return selected
+
+
+def _record_text(record: dict[str, object]) -> str:
+    parts = [
+        str(record.get("path") or ""),
+        str(record.get("title") or ""),
+        " ".join(str(query) for query in record.get("queries") or []),
+        " ".join(str(snippet) for snippet in record.get("snippets") or []),
+        str(record.get("body_excerpt") or ""),
+    ]
+    return "\n".join(part for part in parts if part).lower()
+
+
+def _follow_up_prompt_terms(prompt: str) -> list[str]:
+    values: list[str] = []
+    seen: set[str] = set()
+    for term in _fallback_queries(prompt):
+        key = term.lower()
+        if len(key) < 2 or key in seen:
+            continue
+        seen.add(key)
+        values.append(key)
+    return values
+
+
+def _score_record_overlap(prompt_terms: list[str], record: dict[str, object]) -> int:
+    haystack = _record_text(record)
+    score = 0
+    for term in prompt_terms:
+        if term in haystack:
+            score += 1
+    return score
+
+
+def _heuristic_follow_up_assessment(
+    prompt: str,
+    turns: list[AskTurn],
+) -> dict[str, object] | None:
+    prompt_terms = _follow_up_prompt_terms(prompt)
+    if not prompt_terms:
+        return None
+    scored: list[tuple[int, dict[str, object]]] = []
+    for turn in reversed(turns):
+        for record in turn.evidence_bundle:
+            score = _score_record_overlap(prompt_terms, record)
+            if score > 0:
+                scored.append((score, record))
+    if not scored:
+        return {
+            "needs_retrieval": True,
+            "reason": "Program heuristic found no meaningful overlap between the follow-up and prior evidence.",
+            "carry_over_paths": [],
+            "follow_up_query_plan": [],
+        }
+    scored.sort(key=lambda item: (-item[0], str(item[1].get("path") or "")))
+    carry_over_paths: list[str] = []
+    seen: set[str] = set()
+    for score, record in scored:
+        path = str(record.get("path") or "").strip()
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        carry_over_paths.append(path)
+        if len(carry_over_paths) >= 6:
+            break
+    top_score = scored[0][0]
+    if len(prompt_terms) <= 6 and top_score >= 1 and carry_over_paths:
+        return {
+            "needs_retrieval": False,
+            "reason": "Program heuristic found a focused follow-up with direct overlap to prior evidence.",
+            "carry_over_paths": carry_over_paths,
+            "follow_up_query_plan": [],
+        }
+    if top_score >= 3 or (top_score >= 2 and len(carry_over_paths) >= 4):
+        return {
+            "needs_retrieval": False,
+            "reason": "Program heuristic found strong overlap with prior evidence.",
+            "carry_over_paths": carry_over_paths,
+            "follow_up_query_plan": [],
+        }
+    return {
+        "needs_retrieval": True,
+        "reason": "Program heuristic found only partial overlap, so fresh retrieval is safer.",
+        "carry_over_paths": carry_over_paths,
+        "follow_up_query_plan": [],
+    }
 
 
 def _merge_evidence_bundle(
@@ -1190,6 +1300,7 @@ def _run_ask_scope_core(
     carry_over_evidence: list[dict[str, object]] | None = None,
     planning_note: str | None = None,
     follow_up_context: str | None = None,
+    preloaded_context_override: dict[str, str] | None = None,
 ) -> AskResultBundle:
     if agent == "none":
         answer = _build_agent_prompt(prompt, scope_id, context_mode=context_mode, vault_path=vault_root)
@@ -1204,7 +1315,7 @@ def _run_ask_scope_core(
 
     total_usage = initial_usage or CodexUsage()
     reused_evidence = carry_over_evidence or []
-    preloaded_context = _collect_preloaded_context(scope_id, vault_root, context_mode=context_mode)
+    preloaded_context = preloaded_context_override or _collect_preloaded_context(scope_id, vault_root, context_mode=context_mode)
     _progress("planning retrieval")
     plan_payload = _run_codex_json(
         _build_retrieval_plan_prompt(
@@ -1346,19 +1457,24 @@ def ask_scope_with_session(
     load_scope(scope_id, scopes_dir=scopes_dir)
 
     prior_turns = session.turns[-3:]
-    preloaded_context = _collect_preloaded_context(scope_id, vault_root, context_mode=context_mode)
     _progress("deciding whether follow-up needs retrieval")
-    follow_up_payload = _run_codex_json(
-        _build_follow_up_decision_prompt(prompt, scope_id, context_mode, preloaded_context, prior_turns),
-        schema=_follow_up_schema(),
-        extra_dirs=[vault_root],
-        scopes_dir=scopes_dir,
-        stream_output=True,
-    )
-    follow_up_usage = _consume_last_codex_usage()
-    total_usage = CodexUsage().add(follow_up_usage)
-    if follow_up_usage:
-        _progress(f"follow-up decision usage: {_usage_text(follow_up_usage)}")
+    heuristic_payload = _heuristic_follow_up_assessment(prompt, session.turns)
+    total_usage = CodexUsage()
+    if heuristic_payload is None:
+        follow_up_payload = _run_codex_json(
+            _build_follow_up_decision_prompt(prompt, scope_id, context_mode, prior_turns),
+            schema=_follow_up_schema(),
+            extra_dirs=[vault_root],
+            scopes_dir=scopes_dir,
+            stream_output=True,
+        )
+        follow_up_usage = _consume_last_codex_usage()
+        total_usage = CodexUsage().add(follow_up_usage)
+        if follow_up_usage:
+            _progress(f"follow-up decision usage: {_usage_text(follow_up_usage)}")
+    else:
+        follow_up_payload = heuristic_payload
+        _progress(f"follow-up decision: {follow_up_payload['reason']}")
     carry_over_paths = [str(path).strip() for path in follow_up_payload.get("carry_over_paths", []) if str(path).strip()]
     carry_over_evidence = _select_carry_over_evidence(session.turns, carry_over_paths)
     reason = str(follow_up_payload.get("reason") or "").strip() or "Follow-up decision did not provide a reason."
@@ -1427,6 +1543,13 @@ def ask_scope_with_session(
         carry_over_evidence=carry_over_evidence,
         planning_note=planning_note,
         follow_up_context=follow_up_context,
+        preloaded_context_override=_collect_preloaded_context(
+            scope_id,
+            vault_root,
+            context_mode=context_mode,
+            overview_chars=FOLLOW_UP_OVERVIEW_CHARS,
+            themes_chars=FOLLOW_UP_THEMES_CHARS,
+        ),
     )
 
 

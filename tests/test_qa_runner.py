@@ -471,21 +471,14 @@ This line discusses deep thought and reflective practice.
                 ],
             )
 
-            with patch(
-                "obsidian_knowledge_ingestor.qa_runner._run_codex_json",
-                return_value={
-                    "needs_retrieval": False,
-                    "reason": "已有证据足够",
-                    "carry_over_paths": ["Sources/Zhihu/demo/answers/example.md"],
-                    "follow_up_query_plan": [],
-                },
-            ):
+            with patch("obsidian_knowledge_ingestor.qa_runner._run_codex_json") as json_mock:
                 with patch("obsidian_knowledge_ingestor.qa_runner._run_codex_markdown", return_value="## Answer\n\nnew answer\n") as markdown_mock:
-                    result = ask_scope_with_session("追问", "demo", vault, session=session, scopes_dir=scopes)
+                    result = ask_scope_with_session("无聊的时候怎么办", "demo", vault, session=session, scopes_dir=scopes)
 
         self.assertFalse(result.used_retrieval)
         self.assertEqual(result.evidence_paths, ["Sources/Zhihu/demo/answers/example.md"])
         self.assertEqual(markdown_mock.call_count, 1)
+        self.assertEqual(json_mock.call_count, 0)
 
     def test_ask_scope_with_session_retrieves_when_follow_up_needs_more_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -531,17 +524,7 @@ This line discusses deep thought and reflective practice.
                 ],
             )
 
-            prompts = []
-
             def fake_json(prompt, schema, extra_dirs, scopes_dir=None, stream_output=None):
-                prompts.append(prompt)
-                if len(prompts) == 1:
-                    return {
-                        "needs_retrieval": True,
-                        "reason": "需要新检索",
-                        "carry_over_paths": ["Sources/Zhihu/demo/answers/old.md"],
-                        "follow_up_query_plan": [{"query": "新主题", "bucket": "follow-up", "why": "补证据"}],
-                    }
                 return {
                     "question_reframing": "新问题重述",
                     "query_plan": [{"query": "新主题", "bucket": "follow-up", "why": "补证据"}],
@@ -566,10 +549,9 @@ This line discusses deep thought and reflective practice.
                 with patch("obsidian_knowledge_ingestor.qa_runner.search_scope", side_effect=fake_search_scope):
                     with patch("obsidian_knowledge_ingestor.qa_runner.read_note", side_effect=fake_read):
                         with patch("obsidian_knowledge_ingestor.qa_runner._run_codex_markdown", return_value="## Answer\n\nnew answer\n"):
-                            result = ask_scope_with_session("追问", "demo", vault, session=session, scopes_dir=scopes)
+                            result = ask_scope_with_session("新的职业路径追问", "demo", vault, session=session, scopes_dir=scopes)
 
         self.assertTrue(result.used_retrieval)
-        self.assertIn("Sources/Zhihu/demo/answers/old.md", result.evidence_paths)
         self.assertIn("Sources/Zhihu/demo/answers/new.md", result.evidence_paths)
 
 
