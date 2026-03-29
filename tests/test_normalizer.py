@@ -1,8 +1,8 @@
 from datetime import UTC, datetime
 import unittest
 
-from obsidian_knowledge_ingestor.models import RawItem
-from obsidian_knowledge_ingestor.normalizer import normalize
+from source_notes_ingestor.models import RawItem
+from source_notes_ingestor.normalizer import normalize
 
 
 class NormalizeTests(unittest.TestCase):

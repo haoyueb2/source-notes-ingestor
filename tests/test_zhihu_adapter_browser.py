@@ -2,7 +2,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from obsidian_knowledge_ingestor.adapters.zhihu import fetch_source
+from source_notes_ingestor.adapters.zhihu import fetch_source
 
 
 class ZhihuBrowserAdapterTests(unittest.TestCase):
@@ -31,8 +31,8 @@ class ZhihuBrowserAdapterTests(unittest.TestCase):
                 ),
             )
         ]
-        with patch("obsidian_knowledge_ingestor.adapters.zhihu.discover_zhihu_profile_urls", return_value=[pages[0].url]), patch(
-            "obsidian_knowledge_ingestor.adapters.zhihu.iter_pages_with_browser", return_value=iter(pages)
+        with patch("source_notes_ingestor.adapters.zhihu.discover_zhihu_profile_urls", return_value=[pages[0].url]), patch(
+            "source_notes_ingestor.adapters.zhihu.iter_pages_with_browser", return_value=iter(pages)
         ):
             items = list(fetch_source(target, auth_ctx=None, since=None))
 

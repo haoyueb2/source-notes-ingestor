@@ -2,7 +2,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from obsidian_knowledge_ingestor.adapters.wechat import WeChatAccessError, fetch_source
+from source_notes_ingestor.adapters.wechat import WeChatAccessError, fetch_source
 
 
 class WeChatAdapterTests(unittest.TestCase):

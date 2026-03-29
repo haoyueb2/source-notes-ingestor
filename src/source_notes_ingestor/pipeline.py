@@ -10,7 +10,7 @@ from .config import AppConfig, load_target
 from .models import CanonicalNote
 from .normalizer import normalize
 from .utils import load_json, parse_datetime, slugify
-from .vault_writer import write_note
+from .library_writer import write_note
 
 
 @dataclass(slots=True)
@@ -34,7 +34,7 @@ def _state_lookup_path(source: str, target: dict, config: AppConfig) -> Path:
         name = target.get("author_name") or target.get("author_id") or "zhihu"
     else:
         name = target.get("account_name") or target.get("account_id") or "wechat"
-    return config.vault_path / config.sync_state_dir_name / f"{source}-{slugify(name)}.json"
+    return config.library_path / config.sync_state_dir_name / f"{source}-{slugify(name)}.json"
 
 
 def ingest_source(source: str, target_path: str | Path, config: AppConfig | None = None) -> IngestReport:
@@ -62,7 +62,7 @@ def ingest_source(source: str, target_path: str | Path, config: AppConfig | None
             skipped += 1
             print(f"[ingest] skip {note.content_type} {note.content_id}", file=sys.stderr)
             continue
-        note_path = write_note(note, cfg.vault_path, config=cfg, raw_html=raw_item.raw_html)
+        note_path = write_note(note, cfg.library_path, config=cfg, raw_html=raw_item.raw_html)
         note_paths.append(str(note_path))
         written += 1
         print(f"[ingest] wrote {written}: {note_path}", file=sys.stderr)

@@ -1,6 +1,6 @@
 import unittest
 
-from obsidian_knowledge_ingestor.browser_automation import _extract_links_from_html
+from source_notes_ingestor.browser_automation import _extract_links_from_html
 
 
 class BrowserAutomationTests(unittest.TestCase):

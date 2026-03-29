@@ -1,12 +1,12 @@
 from pathlib import Path
 import unittest
 
-from obsidian_knowledge_ingestor.adapters.zhihu import fetch_source
+from source_notes_ingestor.adapters.zhihu import fetch_source
 
 
 class ZhihuAuthorFilterTests(unittest.TestCase):
     def test_filters_out_answer_from_another_author(self) -> None:
-        html_path = Path('/Users/haoyuebai/Dev/ai/obsidian-knowledge-ingestor/samples/zhihu/lin-lin-98-23/2196379477.html')
+        html_path = Path(__file__).resolve().parents[1] / 'samples/zhihu/lin-lin-98-23/2196379477.html'
         items = fetch_source(
             {
                 'author_id': 'lin-lin-98-23',
@@ -20,7 +20,7 @@ class ZhihuAuthorFilterTests(unittest.TestCase):
         self.assertEqual(items, [])
 
     def test_keeps_pin_from_target_author(self) -> None:
-        html_path = Path('/Users/haoyuebai/Dev/ai/obsidian-knowledge-ingestor/samples/zhihu/lin-lin-98-23/1445199313127813120.html')
+        html_path = Path(__file__).resolve().parents[1] / 'samples/zhihu/lin-lin-98-23/1445199313127813120.html'
         items = fetch_source(
             {
                 'author_id': 'lin-lin-98-23',

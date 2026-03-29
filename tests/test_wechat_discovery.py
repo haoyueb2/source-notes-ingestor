@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from obsidian_knowledge_ingestor.wechat_discovery import (
+from source_notes_ingestor.wechat_discovery import (
     _extract_seed_url_candidates,
     _extract_urls_from_general_msg_list,
     discover_from_profile_ext,
@@ -91,7 +91,7 @@ class WeChatDiscoveryTests(unittest.TestCase):
         def fake_fetch(_url: str, *, headers: dict[str, str] | None = None) -> str:
             return responses.pop(0)
 
-        with patch("obsidian_knowledge_ingestor.wechat_discovery._fetch_text", side_effect=fake_fetch):
+        with patch("source_notes_ingestor.wechat_discovery._fetch_text", side_effect=fake_fetch):
             report = discover_from_profile_ext(
                 "大魔王的后花园",
                 account_biz="MzAwMDYwMTQ4Mg==",

@@ -1,7 +1,7 @@
 {
   "scope_id": "linlin",
   "display_name": "林琳",
-  "description": "Aggregate scope for the same creator across Zhihu and WeChat vault sources.",
+  "description": "Aggregate scope for the same creator across Zhihu and WeChat note sources.",
   "sources": [
     {
       "path": "Sources/Zhihu/lin-lin-98-23",

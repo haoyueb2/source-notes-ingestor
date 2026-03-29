@@ -48,12 +48,12 @@ class ZhihuVerificationReport:
     author_id: str
     profile_counts: dict[str, int]
     accessible_counts: dict[str, int]
-    vault_counts: dict[str, int]
+    library_counts: dict[str, int]
     checks: dict[str, CountCheck]
 
 
-def _count_markdown(vault_root: Path, author_id: str) -> dict[str, int]:
-    base = vault_root / "Sources" / "Zhihu" / author_id
+def _count_markdown(library_root: Path, author_id: str) -> dict[str, int]:
+    base = library_root / "Sources" / "Zhihu" / author_id
     return {
         "answers": len(list((base / "answers").glob("*.md"))) if (base / "answers").exists() else 0,
         "articles": len(list((base / "articles").glob("*.md"))) if (base / "articles").exists() else 0,
@@ -72,7 +72,7 @@ def _profile_text_counts(text: str) -> dict[str, int]:
 
 def _copy_profile(user_data_dir: str | Path) -> str:
     source = Path(user_data_dir).expanduser()
-    temp_root = Path(tempfile.mkdtemp(prefix="oki-zhihu-verify-"))
+    temp_root = Path(tempfile.mkdtemp(prefix="sni-zhihu-verify-"))
     profile_copy = temp_root / "profile"
     shutil.copytree(
         source,
@@ -161,11 +161,11 @@ def _scrape_counts(profile_url: str, user_data_dir: str | Path) -> tuple[dict[st
     return profile_counts, accessible_counts
 
 
-def _build_checks(profile_counts: dict[str, int], accessible_counts: dict[str, int], vault_counts: dict[str, int]) -> dict[str, CountCheck]:
+def _build_checks(profile_counts: dict[str, int], accessible_counts: dict[str, int], library_counts: dict[str, int]) -> dict[str, CountCheck]:
     checks: dict[str, CountCheck] = {}
     for key in COUNT_KEYS:
         expected = accessible_counts.get(key, 0)
-        actual = vault_counts.get(key, 0)
+        actual = library_counts.get(key, 0)
         status = "pass" if expected == actual else "fail"
         notes: list[str] = []
         profile_value = profile_counts.get(key, 0)
@@ -181,17 +181,17 @@ def verify_zhihu_ingestion(
     profile_url: str,
     author_id: str,
     user_data_dir: str | Path,
-    vault_root: str | Path,
+    library_root: str | Path,
     out_path: str | Path | None = None,
 ) -> ZhihuVerificationReport:
     profile_counts, accessible_counts = _scrape_counts(profile_url, user_data_dir)
-    vault_counts = _count_markdown(Path(vault_root), author_id)
+    library_counts = _count_markdown(Path(library_root), author_id)
     report = ZhihuVerificationReport(
         author_id=author_id,
         profile_counts=profile_counts,
         accessible_counts=accessible_counts,
-        vault_counts=vault_counts,
-        checks=_build_checks(profile_counts, accessible_counts, vault_counts),
+        library_counts=library_counts,
+        checks=_build_checks(profile_counts, accessible_counts, library_counts),
     )
 
     if out_path is not None:
@@ -203,7 +203,7 @@ def verify_zhihu_ingestion(
                     "author_id": report.author_id,
                     "profile_counts": report.profile_counts,
                     "accessible_counts": report.accessible_counts,
-                    "vault_counts": report.vault_counts,
+                    "library_counts": report.library_counts,
                     "checks": {key: asdict(value) for key, value in report.checks.items()},
                 },
                 ensure_ascii=False,

@@ -1,0 +1,32 @@
+{
+  "name": "notes-rg-qa",
+  "version": "0.1.0",
+  "description": "Model-agnostic note-library Q&A skill that relies on rg and direct note reads.",
+  "author": {
+    "name": "haoyueb2",
+    "email": "author@example.com",
+    "url": "https://github.com/haoyueb2"
+  },
+  "homepage": "https://haoyueb2.github.io/",
+  "repository": "https://github.com/haoyueb2",
+  "license": "MIT",
+  "keywords": ["notes", "qa", "rg", "retrieval", "markdown"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Notes RG QA",
+    "shortDescription": "Use rg to search raw notes and answer from evidence.",
+    "longDescription": "A repo-local, model-agnostic skill for note-library question answering. It uses rg plus direct note reads and answers only from opened note evidence.",
+    "developerName": "haoyueb2",
+    "category": "Productivity",
+    "capabilities": ["Interactive"],
+    "websiteURL": "https://haoyueb2.github.io/",
+    "privacyPolicyURL": "https://haoyueb2.github.io/",
+    "termsOfServiceURL": "https://haoyueb2.github.io/",
+    "defaultPrompt": [
+      "Use rg to answer from raw library notes.",
+      "Search the library with multiple short queries before concluding.",
+      "Quote evidence paths from notes you actually opened."
+    ],
+    "brandColor": "#2563EB"
+  }
+}

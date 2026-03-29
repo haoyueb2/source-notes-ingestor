@@ -10,7 +10,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .browser_automation import BrowserAutomationError, default_storage_state_path, default_user_data_dir, save_login_session
-from .config import AppConfig, DEFAULT_OBSIDIAN_VAULT_PATH, load_target
+from .config import AppConfig, DEFAULT_LIBRARY_PATH, load_target
 from .pipeline import IngestReport, ingest_source
 from .wechat_discovery import WeChatDiscoveryError, discover_wechat_history
 from .utils import dump_json, load_json, slugify
@@ -26,15 +26,15 @@ WECHAT_VERIFICATION_MARKERS = (
     "WeChat returned a verification page",
     "Complete the human verification",
 )
-WECHAT_DISABLE_RETRY_ENV = "OKI_WECHAT_DISABLE_RETRY"
+WECHAT_DISABLE_RETRY_ENV = "SNI_WECHAT_DISABLE_RETRY"
 
 
-def _vault_help_text() -> str:
-    return f"Override Obsidian vault path (default: {DEFAULT_OBSIDIAN_VAULT_PATH})"
+def _library_help_text() -> str:
+    return f"Override notes library path (default: {DEFAULT_LIBRARY_PATH})"
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="oki", description="Obsidian knowledge ingestion CLI")
+    parser = argparse.ArgumentParser(prog="sni", description="Source notes ingestion CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     auth_parser = subparsers.add_parser("auth", help="Save a browser login session for a source")
@@ -47,12 +47,12 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_parser = subparsers.add_parser("ingest", help="Ingest content from a supported source")
     ingest_parser.add_argument("source", choices=["zhihu", "wechat"])
     ingest_parser.add_argument("--target", required=True, help="Path to source target JSON")
-    ingest_parser.add_argument("--vault", help=_vault_help_text())
+    ingest_parser.add_argument("--library", help=_library_help_text())
 
     verify_parser = subparsers.add_parser("verify", help="Verify ingestion counts against source-visible counts")
     verify_parser.add_argument("source", choices=["zhihu"])
     verify_parser.add_argument("--target", required=True, help="Path to source target JSON")
-    verify_parser.add_argument("--vault", help=_vault_help_text())
+    verify_parser.add_argument("--library", help=_library_help_text())
     verify_parser.add_argument("--out", help="Optional JSON report output path")
 
     discover_parser = subparsers.add_parser("discover", help="Discover source URLs without ingesting content")
@@ -65,7 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _wechat_state_path(target: dict, config: AppConfig) -> Path:
     name = target.get("account_name") or target.get("account_id") or "wechat"
-    return config.vault_path / config.sync_state_dir_name / f"wechat-{slugify(name)}.json"
+    return config.library_path / config.sync_state_dir_name / f"wechat-{slugify(name)}.json"
 
 
 def _write_wechat_resume_target(target: dict, config: AppConfig) -> Path:
@@ -104,10 +104,10 @@ def _ingest_wechat_with_verification_resume(target_path: str | Path, config: App
             if attempt == 0:
                 report = ingest_source("wechat", current_target_path, config=config)
             else:
-                cmd = [sys.executable, "-m", "obsidian_knowledge_ingestor.cli", "ingest", "wechat", "--target", str(current_target_path)]
+                cmd = [sys.executable, "-m", "source_notes_ingestor.cli", "ingest", "wechat", "--target", str(current_target_path)]
                 env = os.environ.copy()
                 env[WECHAT_DISABLE_RETRY_ENV] = "1"
-                env["OBSIDIAN_VAULT_PATH"] = str(config.vault_path)
+                env["NOTES_LIBRARY_PATH"] = str(config.library_path)
                 if "PYTHONPATH" not in env:
                     env["PYTHONPATH"] = "src"
                 result = subprocess.run(cmd, cwd=Path(__file__).resolve().parents[2], env=env, capture_output=True, text=True)
@@ -146,8 +146,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     config = AppConfig.from_env()
-    if getattr(args, "vault", None):
-        config.vault_path = Path(args.vault).expanduser()
+    if getattr(args, "library", None):
+        config.library_path = Path(args.library).expanduser()
 
     if args.command == "auth":
         storage_state = args.storage_state or str(default_storage_state_path(config.state_dir, args.source))
@@ -178,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
             profile_url=profile_url,
             author_id=author_id,
             user_data_dir=browser_cfg.get('user_data_dir'),
-            vault_root=args.vault or config.vault_path,
+            library_root=args.library or config.library_path,
             out_path=args.out,
         )
         from dataclasses import asdict as _asdict
@@ -186,7 +186,7 @@ def main(argv: list[str] | None = None) -> int:
             'author_id': report.author_id,
             'profile_counts': report.profile_counts,
             'accessible_counts': report.accessible_counts,
-            'vault_counts': report.vault_counts,
+            'library_counts': report.library_counts,
             'checks': {k: _asdict(v) for k, v in report.checks.items()},
         }, ensure_ascii=False, indent=2))
         return 0

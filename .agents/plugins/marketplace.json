@@ -1,14 +1,14 @@
 {
-  "name": "obsidian-knowledge-ingestor-local",
+  "name": "source-notes-ingestor-local",
   "interface": {
-    "displayName": "Obsidian Knowledge Ingestor Local"
+    "displayName": "Source Notes Ingestor Local"
   },
   "plugins": [
     {
-      "name": "obsidian-qa",
+      "name": "notes-rg-qa",
       "source": {
         "source": "local",
-        "path": "./plugins/obsidian-qa"
+        "path": "./plugins/notes-rg-qa"
       },
       "policy": {
         "installation": "AVAILABLE",

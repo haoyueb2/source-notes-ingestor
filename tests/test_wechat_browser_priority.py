@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from obsidian_knowledge_ingestor.adapters.wechat import fetch_source
+from source_notes_ingestor.adapters.wechat import fetch_source
 
 
 class WeChatBrowserPriorityTests(unittest.TestCase):
@@ -16,8 +16,8 @@ class WeChatBrowserPriorityTests(unittest.TestCase):
                 "headless": False,
             },
         }
-        with patch("obsidian_knowledge_ingestor.adapters.wechat._browser_seed_pages", return_value=[("https://mp.weixin.qq.com/s/demo", "<html><title>T</title><body>Body</body></html>")]), patch(
-            "obsidian_knowledge_ingestor.adapters.wechat._html_seed_pages", side_effect=AssertionError("html seeds should not be used")
+        with patch("source_notes_ingestor.adapters.wechat._browser_seed_pages", return_value=[("https://mp.weixin.qq.com/s/demo", "<html><title>T</title><body>Body</body></html>")]), patch(
+            "source_notes_ingestor.adapters.wechat._html_seed_pages", side_effect=AssertionError("html seeds should not be used")
         ):
             items = list(fetch_source(target, auth_ctx=None, since=None))
 

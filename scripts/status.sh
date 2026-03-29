@@ -21,9 +21,9 @@ do
   fi
 done
 
-echo "== Demo Vault =="
-if [ -d "$repo_root/demo-vault/Sources" ]; then
-  find "$repo_root/demo-vault/Sources" -type f | sed "s|$repo_root/||" | sort
+echo "== Demo Library =="
+if [ -d "$repo_root/demo-library/Sources" ]; then
+  find "$repo_root/demo-library/Sources" -type f | sed "s|$repo_root/||" | sort
 else
-  echo "demo-vault not materialized"
+  echo "demo-library not materialized"
 fi

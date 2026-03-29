@@ -1,6 +1,6 @@
 import unittest
 
-from obsidian_knowledge_ingestor.cli import build_parser
+from source_notes_ingestor.cli import build_parser
 
 
 class CliParserTests(unittest.TestCase):
