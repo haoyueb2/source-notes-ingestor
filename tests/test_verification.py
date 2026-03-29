@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from obsidian_knowledge_ingestor.verification import _build_checks, _profile_text_counts
+from source_notes_ingestor.verification import _build_checks, _profile_text_counts
 
 
 class VerificationTests(unittest.TestCase):
@@ -13,11 +13,11 @@ class VerificationTests(unittest.TestCase):
             {"answers": 27, "articles": 3, "thoughts": 60},
         )
 
-    def test_checks_warn_when_profile_and_accessible_differ_but_vault_matches_accessible(self) -> None:
+    def test_checks_warn_when_profile_and_accessible_differ_but_library_matches_accessible(self) -> None:
         checks = _build_checks(
             profile_counts={"answers": 27, "articles": 3, "thoughts": 60},
             accessible_counts={"answers": 26, "articles": 3, "thoughts": 60},
-            vault_counts={"answers": 26, "articles": 3, "thoughts": 60},
+            library_counts={"answers": 26, "articles": 3, "thoughts": 60},
         )
         self.assertEqual(checks["answers"].status, "warn")
         self.assertEqual(checks["articles"].status, "pass")

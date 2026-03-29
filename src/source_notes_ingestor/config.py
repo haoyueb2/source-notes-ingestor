@@ -6,12 +6,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-DEFAULT_OBSIDIAN_VAULT_PATH = "~/Documents/oki-main-vault"
+DEFAULT_LIBRARY_PATH = "~/Documents/source-notes"
 
 
 @dataclass(slots=True)
 class AppConfig:
-    vault_path: Path
+    library_path: Path
     state_dir: Path
     raw_data_dir: Path
     asset_dir_name: str = "Sources/_assets"
@@ -21,7 +21,7 @@ class AppConfig:
     @classmethod
     def from_env(cls) -> "AppConfig":
         return cls(
-            vault_path=Path(os.environ.get("OBSIDIAN_VAULT_PATH", DEFAULT_OBSIDIAN_VAULT_PATH)).expanduser(),
+            library_path=Path(os.environ.get("NOTES_LIBRARY_PATH", DEFAULT_LIBRARY_PATH)).expanduser(),
             state_dir=Path(os.environ.get("STATE_DIR", "./state")).expanduser(),
             raw_data_dir=Path(os.environ.get("RAW_DATA_DIR", "./samples")).expanduser(),
             asset_dir_name=os.environ.get("ASSET_DIR_NAME", "Sources/_assets"),

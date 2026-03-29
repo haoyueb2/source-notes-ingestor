@@ -61,7 +61,7 @@ def _launch_args() -> list[str]:
 
 def _copy_user_data_dir(user_data_dir: str | Path) -> tuple[Path, Path]:
     source = Path(user_data_dir).expanduser()
-    temp_root = Path(tempfile.mkdtemp(prefix="oki-browser-profile-"))
+    temp_root = Path(tempfile.mkdtemp(prefix="sni-browser-profile-"))
     profile_copy = temp_root / "profile"
     shutil.copytree(
         source,

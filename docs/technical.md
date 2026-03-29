@@ -1,37 +1,32 @@
 # Technical Guide
 
 ## Purpose
-`obsidian-knowledge-ingestor` is a local-first ingestion project:
+`source-notes-ingestor` is a local-first ingestion project:
 - collect content from Zhihu and WeChat
 - normalize it into a stable Markdown note format
-- store it in an Obsidian vault
+- store it in a local notes library
 
-The repository intentionally no longer ships a built-in QA runtime. Vault retrieval and synthesis now live in the repo-local Obsidian QA plugin and skill.
+The repository deliberately avoids shipping an in-process Q&A runtime. Retrieval is handled by a thin repo-local skill/plugin that uses `rg` and direct file reads.
 
 ## Technology Stack
 - Runtime: Python 3
 - Packaging: `pyproject.toml`
 - Browser automation: Playwright
 - HTML parsing and normalization: BeautifulSoup plus in-repo HTML helpers
-- Storage model: Markdown notes plus YAML frontmatter in an Obsidian vault
+- Storage model: Markdown notes plus YAML frontmatter in a local notes library
 - State tracking: JSON state files under `Sources/_state`
-- Agent QA path: repo-local plugin/skill plus the official Obsidian CLI
+- Agent retrieval path: repo-local plugin/skill plus shell tools such as `rg`
 
 ## Repository Structure
-- `src/obsidian_knowledge_ingestor/`
-  - `adapters/`
-    - `zhihu.py`: Zhihu acquisition logic
-    - `wechat.py`: WeChat acquisition logic
-    - `feed.py`: shared feed/manual seed helpers
+- `src/source_notes_ingestor/`
+  - `adapters/`: Zhihu and WeChat acquisition logic
   - `browser_automation.py`: browser session persistence and page discovery
   - `normalizer.py`: canonical note mapping
-  - `vault_writer.py`: note materialization, assets, and sync state
+  - `library_writer.py`: note materialization, assets, and sync state
   - `pipeline.py`: end-to-end ingestion orchestration
-  - `verification.py`: source-vs-vault verification logic
-- `plugins/obsidian-qa/`: model-agnostic Obsidian QA plugin and skill
-- `docs/`: architecture, plan, and technical docs
-- `samples/`: example target files
-- `targets/`: local real-world target configs
+  - `verification.py`: source-vs-library verification logic
+- `plugins/notes-rg-qa/`: model-agnostic retrieval skill/plugin
+- `docs/`: architecture and technical docs
 - `tests/`: ingestion-focused unit tests
 
 ## Data Flow
@@ -42,19 +37,18 @@ Zhihu / WeChat
   -> normalize()
   -> CanonicalNote
   -> write_note()
-  -> Obsidian Vault
-  -> Obsidian QA plugin/skill
-  -> official Obsidian CLI
-  -> agent answer from raw notes
+  -> local notes library
+  -> notes-rg-qa skill/plugin
+  -> rg + raw note reads
+  -> agent answer from evidence
 ```
 
 ## Core Contracts
-The project keeps these ingestion interfaces stable:
 - `fetch_source(target, auth_ctx, since) -> raw_items[]`
 - `normalize(raw_item) -> canonical_note`
-- `write_note(canonical_note, vault_path) -> note_path`
+- `write_note(canonical_note, library_path) -> note_path`
 
-The Python package does not define a QA contract anymore. Retrieval is delegated to the plugin/skill layer.
+No Python-level Q&A contract remains in the package.
 
 ## Zhihu Implementation
 Zhihu supports three acquisition modes:
@@ -62,23 +56,11 @@ Zhihu supports three acquisition modes:
 - authenticated API-backed ingestion
 - manual seed ingestion from URLs or saved HTML
 
-### Why API plus browser
-Pure HTTP requests are fragile on Zhihu. The working path is:
-1. persist a real logged-in browser session with `oki auth zhihu`
+The stable path is:
+1. save a real logged-in browser session with `sni auth zhihu`
 2. reuse that session for acquisition
 3. prefer API-backed extraction when the session can access the data
 4. fall back to page discovery and page fetch when needed
-
-### Author filtering
-Zhihu pages can expose unrelated answers or pins through recommendations or interaction surfaces. The adapter verifies author identity before materializing items into the vault.
-
-### Post-ingest verification
-Zhihu verification uses three count layers:
-- `profile_counts`: counts shown in the profile header
-- `accessible_counts`: counts actually exposed through accessible lists
-- `vault_counts`: counts written into the vault
-
-This keeps source-visible drift separate from pipeline correctness.
 
 ## WeChat Implementation
 WeChat supports:
@@ -86,37 +68,12 @@ WeChat supports:
 - browser-session page fetch
 - `discover wechat`, which derives `mp/profile_ext?action=getmsg` from a reachable seed article and paginates through history
 - streaming note materialization while the browser queue is still being consumed
-- verification-aware resume based on vault state
+- verification-aware resume based on library state
 
-Important constraint:
-- local WeChat cache is not treated as authoritative history discovery
-- it is used only to recover seed URLs with `key`, `pass_ticket`, and related query parameters
-- the actual history list comes from `profile_ext/getmsg`
+The history source is `profile_ext/getmsg`, not cached links.
 
-### Detailed WeChat route
-Phase 1: history discovery
-1. Start from one or more reachable article URLs.
-2. Recover the full article URL when possible, including `__biz`, `uin`, `key`, and `pass_ticket`.
-3. Fetch the article HTML and extract `appmsg_token`.
-4. Call `mp/profile_ext?action=getmsg` with those parameters.
-5. Parse `general_msg_list` into a flat URL queue.
-
-Phase 2: body ingestion
-1. Feed the discovered article URLs into the browser-backed WeChat adapter.
-2. Generate a stable `content_id` from `mid + idx + sn` for query-style article URLs.
-3. Normalize each article immediately after fetch.
-4. Write Markdown and state immediately, instead of waiting for the full queue to finish.
-
-### Verification-aware resume
-When WeChat serves a verification page mid-run:
-1. the current note is not written
-2. previously written notes remain durable
-3. state already contains completed `content_id`s
-4. the CLI recomputes the remaining URL queue from the original target and current state
-5. ingestion retries from the remaining URLs
-
-## Obsidian Storage Model
-Vault layout:
+## Library Storage Model
+Library layout:
 - `Sources/Zhihu/<author>/answers/*.md`
 - `Sources/Zhihu/<author>/thoughts/*.md`
 - `Sources/Zhihu/<author>/articles/*.md`
@@ -131,24 +88,17 @@ Each note includes:
 - checksum-based update semantics
 
 ## CLI Surface
-`oki` is ingestion-only:
-- `oki auth <source>`
-- `oki ingest <source> --target <file>`
-- `oki discover wechat --target <file>`
-- `oki verify zhihu --target <file> --vault <path>`
+`sni` is ingestion-only:
+- `sni auth <source>`
+- `sni ingest <source> --target <file>`
+- `sni discover wechat --target <file>`
+- `sni verify zhihu --target <file> --library <path>`
 
-Anything that queries the vault should now go through the repo-local Obsidian QA plugin/skill.
+## notes-rg-qa
+The retrieval layer is intentionally small:
+- no separate retrieval index
+- no session persistence
+- no model-specific CLI wrappers
+- no editor-specific API requirement
 
-## Obsidian QA Plugin
-The plugin is intentionally thin:
-- it does not maintain a parallel note index
-- it does not generate scope maps or derived context packs
-- it does not persist ask sessions or usage logs
-
-Instead, it gives the agent a strict retrieval workflow:
-1. refine the question
-2. run multiple short `obsidian search` queries
-3. open matched raw notes with `obsidian read`
-4. answer only from the raw note evidence
-
-This keeps the vault as the single source of truth while removing the duplicated QA product layer from `oki`.
+Agents search the note library with `rg`, open the relevant note files, and answer from raw evidence.

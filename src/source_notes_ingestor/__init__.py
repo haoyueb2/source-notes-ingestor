@@ -1,4 +1,4 @@
-"""obsidian_knowledge_ingestor package."""
+"""source_notes_ingestor package."""
 
 __all__ = ["__version__"]
 

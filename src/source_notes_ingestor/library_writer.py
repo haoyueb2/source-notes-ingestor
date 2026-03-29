@@ -12,16 +12,16 @@ from .utils import dump_json, ensure_dir, load_json, slugify
 
 def _note_directory(note: CanonicalNote, config: AppConfig) -> Path:
     if note.source == "zhihu":
-        return config.vault_path / "Sources" / "Zhihu" / slugify(note.author_name) / f"{note.content_type}s"
-    return config.vault_path / "Sources" / "WeChat" / slugify(note.author_name)
+        return config.library_path / "Sources" / "Zhihu" / slugify(note.author_name) / f"{note.content_type}s"
+    return config.library_path / "Sources" / "WeChat" / slugify(note.author_name)
 
 
 def _state_path(note: CanonicalNote, config: AppConfig) -> Path:
-    return config.vault_path / config.sync_state_dir_name / f"{note.source}-{slugify(note.author_name)}.json"
+    return config.library_path / config.sync_state_dir_name / f"{note.source}-{slugify(note.author_name)}.json"
 
 
 def _asset_directory(note: CanonicalNote, config: AppConfig) -> Path:
-    return config.vault_path / config.asset_dir_name / note.source / slugify(note.author_name) / note.content_id
+    return config.library_path / config.asset_dir_name / note.source / slugify(note.author_name) / note.content_id
 
 
 def _serialize_datetime(value: datetime | None) -> str | None:
@@ -85,7 +85,7 @@ def _download_asset(url: str, dest_dir: Path) -> str | None:
         return None
 
 
-def _rewrite_assets(markdown_body: str, original_assets: list[str], local_assets: dict[str, str], asset_root: Path, vault_path: Path) -> tuple[str, list[str]]:
+def _rewrite_assets(markdown_body: str, original_assets: list[str], local_assets: dict[str, str], asset_root: Path, library_path: Path) -> tuple[str, list[str]]:
     body = markdown_body
     refs: list[str] = []
     for asset in original_assets:
@@ -93,7 +93,7 @@ def _rewrite_assets(markdown_body: str, original_assets: list[str], local_assets
         if not local_name:
             refs.append(asset)
             continue
-        rel = str((asset_root / local_name).relative_to(vault_path))
+        rel = str((asset_root / local_name).relative_to(library_path))
         body = body.replace(asset, rel)
         refs.append(rel)
     return body, refs
@@ -101,13 +101,13 @@ def _rewrite_assets(markdown_body: str, original_assets: list[str], local_assets
 
 def write_note(
     note: CanonicalNote,
-    vault_path: str | Path,
+    library_path: str | Path,
     config: AppConfig | None = None,
     raw_html: str | None = None,
 ) -> Path:
     cfg = config or AppConfig.from_env()
     cfg = AppConfig(
-        vault_path=Path(vault_path).expanduser(),
+        library_path=Path(library_path).expanduser(),
         state_dir=cfg.state_dir,
         raw_data_dir=cfg.raw_data_dir,
         asset_dir_name=cfg.asset_dir_name,
@@ -130,7 +130,7 @@ def write_note(
         if local_name:
             downloaded[asset] = local_name
 
-    markdown_body, asset_refs = _rewrite_assets(note.markdown_body, note.assets, downloaded, asset_dir, cfg.vault_path)
+    markdown_body, asset_refs = _rewrite_assets(note.markdown_body, note.assets, downloaded, asset_dir, cfg.library_path)
     materialized_note = CanonicalNote(
         source=note.source,
         author_id=note.author_id,
@@ -158,7 +158,7 @@ def write_note(
     state.setdefault("items", {})
     state["items"][note.content_id] = {
         "checksum": note.checksum,
-        "note_path": str(note_path.relative_to(cfg.vault_path)),
+        "note_path": str(note_path.relative_to(cfg.library_path)),
         "updated_at": _serialize_datetime(note.updated_at),
         "published_at": _serialize_datetime(note.published_at),
     }

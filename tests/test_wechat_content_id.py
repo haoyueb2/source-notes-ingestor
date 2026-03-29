@@ -1,6 +1,6 @@
 import unittest
 
-from obsidian_knowledge_ingestor.adapters.wechat import content_id_from_url
+from source_notes_ingestor.adapters.wechat import content_id_from_url
 
 
 class WeChatContentIdTests(unittest.TestCase):

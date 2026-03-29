@@ -2,19 +2,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 import unittest
 
-from obsidian_knowledge_ingestor.config import AppConfig
-from obsidian_knowledge_ingestor.models import CanonicalNote
-from obsidian_knowledge_ingestor.vault_writer import write_note
+from source_notes_ingestor.config import AppConfig
+from source_notes_ingestor.models import CanonicalNote
+from source_notes_ingestor.library_writer import write_note
 
 
-class VaultWriterTests(unittest.TestCase):
+class LibraryWriterTests(unittest.TestCase):
     def test_write_note_materializes_frontmatter_and_state(self) -> None:
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
-            vault_path = root / "vault"
-            config = AppConfig(vault_path=vault_path, state_dir=root / "state", raw_data_dir=root / "raw")
+            library_path = root / "library"
+            config = AppConfig(library_path=library_path, state_dir=root / "state", raw_data_dir=root / "raw")
             note = CanonicalNote(
                 source="wechat",
                 author_id="acct",
@@ -33,13 +33,13 @@ class VaultWriterTests(unittest.TestCase):
                 checksum="abc123",
             )
 
-            note_path = write_note(note, vault_path, config=config, raw_html="<article>Body</article>")
+            note_path = write_note(note, library_path, config=config, raw_html="<article>Body</article>")
 
             self.assertTrue(note_path.exists())
             content = note_path.read_text(encoding="utf-8")
             self.assertIn('source: "wechat"', content)
             self.assertIn("# Title", content)
-            state_path = vault_path / "Sources/_state/wechat-example-account.json"
+            state_path = library_path / "Sources/_state/wechat-example-account.json"
             self.assertTrue(state_path.exists())
             self.assertEqual(note_path.name, "My-Article.md")
 
@@ -48,8 +48,8 @@ class VaultWriterTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
-            vault_path = root / "vault"
-            config = AppConfig(vault_path=vault_path, state_dir=root / "state", raw_data_dir=root / "raw")
+            library_path = root / "library"
+            config = AppConfig(library_path=library_path, state_dir=root / "state", raw_data_dir=root / "raw")
             base_kwargs = dict(
                 source="wechat",
                 author_id="acct",
@@ -68,8 +68,8 @@ class VaultWriterTests(unittest.TestCase):
             first = CanonicalNote(content_id="item-1", assets=[], checksum="abc123", **base_kwargs)
             second = CanonicalNote(content_id="item-2", assets=[], checksum="def456", **base_kwargs)
 
-            first_path = write_note(first, vault_path, config=config, raw_html="<article>Body</article>")
-            second_path = write_note(second, vault_path, config=config, raw_html="<article>Body</article>")
+            first_path = write_note(first, library_path, config=config, raw_html="<article>Body</article>")
+            second_path = write_note(second, library_path, config=config, raw_html="<article>Body</article>")
 
             self.assertEqual(first_path.name, "Repeated-Title.md")
             self.assertEqual(second_path.name, "Repeated-Title-item-2.md")
@@ -79,8 +79,8 @@ class VaultWriterTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
-            vault_path = root / "vault"
-            config = AppConfig(vault_path=vault_path, state_dir=root / "state", raw_data_dir=root / "raw")
+            library_path = root / "library"
+            config = AppConfig(library_path=library_path, state_dir=root / "state", raw_data_dir=root / "raw")
             note = CanonicalNote(
                 source="zhihu",
                 author_id="lin-lin-98-23",
@@ -99,7 +99,7 @@ class VaultWriterTests(unittest.TestCase):
                 checksum="abc123",
             )
 
-            note_path = write_note(note, vault_path, config=config, raw_html="<article>Body</article>")
+            note_path = write_note(note, library_path, config=config, raw_html="<article>Body</article>")
 
             self.assertEqual(note_path.name, "为什么人类天天吃同样的东西很快会腻.md")
 
@@ -108,8 +108,8 @@ class VaultWriterTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
-            vault_path = root / "vault"
-            config = AppConfig(vault_path=vault_path, state_dir=root / "state", raw_data_dir=root / "raw")
+            library_path = root / "library"
+            config = AppConfig(library_path=library_path, state_dir=root / "state", raw_data_dir=root / "raw")
             base_kwargs = dict(
                 source="zhihu",
                 author_id="lin-lin-98-23",
@@ -128,8 +128,8 @@ class VaultWriterTests(unittest.TestCase):
             first = CanonicalNote(content_id="item-1", assets=[], checksum="abc123", **base_kwargs)
             second = CanonicalNote(content_id="item-2", assets=[], checksum="def456", **base_kwargs)
 
-            first_path = write_note(first, vault_path, config=config, raw_html="<article>Body</article>")
-            second_path = write_note(second, vault_path, config=config, raw_html="<article>Body</article>")
+            first_path = write_note(first, library_path, config=config, raw_html="<article>Body</article>")
+            second_path = write_note(second, library_path, config=config, raw_html="<article>Body</article>")
 
             self.assertEqual(first_path.name, "重复标题.md")
             self.assertEqual(second_path.name, "重复标题-item-2.md")

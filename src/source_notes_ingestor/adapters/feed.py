@@ -10,7 +10,7 @@ from urllib.error import HTTPError
 
 from ..utils import parse_datetime
 
-USER_AGENT = "obsidian-knowledge-ingestor/0.1 (+https://local)"
+USER_AGENT = "source-notes-ingestor/0.1 (+https://local)"
 
 
 class FetchError(RuntimeError):

@@ -1,5 +1,5 @@
-# vault writer
+# library writer
 
-Scaffold placeholder for Obsidian vault writing.
+Legacy scaffold placeholder for note-library writing.
 
-This directory will eventually contain Markdown rendering, asset persistence, frontmatter generation, and state-aware note updates. The initial scaffold intentionally contains no runtime implementation.
+Runtime note materialization now lives in `src/source_notes_ingestor/library_writer.py`.
