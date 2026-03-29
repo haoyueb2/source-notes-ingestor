@@ -23,15 +23,15 @@ Exit criteria:
 - A target WeChat account yields historical articles and repeatable incremental updates.
 - Duplicate runs do not create duplicate notes.
 
-## v2 qa
-- Add the `qa_runner` wrapper around the official Obsidian CLI.
-- Define standard retrieval flows: search, open note, scoped recall for a target author/account/topic.
-- Validate that Claude/Codex can answer against vault content without touching raw crawler outputs.
+## v2 agent tooling
+- Provide a repo-local Obsidian QA plugin and skill instead of a Python QA runtime.
+- Standardize an agent retrieval flow around the official Obsidian CLI.
+- Validate that Codex/Claude-style agents can answer against vault content without touching crawler internals.
 
 Exit criteria:
-- Vault notes are searchable through the official CLI.
-- Agent workflows can answer source-specific questions using retrieved notes.
-- Query behavior is documented with example prompts and expected outputs.
+- The repo-local plugin/skill can be loaded.
+- Agent workflows can answer source-specific questions using raw vault notes through the official CLI.
+- Retrieval behavior is documented with example prompts and expected outputs.
 
 ## v3 ops
 - Add scheduling, structured logging, retry handling, and failure reporting.

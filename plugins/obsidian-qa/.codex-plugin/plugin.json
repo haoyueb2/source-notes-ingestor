@@ -1,0 +1,32 @@
+{
+  "name": "obsidian-qa",
+  "version": "0.1.0",
+  "description": "Model-agnostic Obsidian vault Q&A skill that requires the official Obsidian CLI.",
+  "author": {
+    "name": "haoyueb2",
+    "email": "author@example.com",
+    "url": "https://github.com/haoyueb2"
+  },
+  "homepage": "https://github.com/haoyueb2/obsidian-knowledge-ingestor",
+  "repository": "https://github.com/haoyueb2/obsidian-knowledge-ingestor",
+  "license": "MIT",
+  "keywords": ["obsidian", "qa", "vault", "retrieval", "cli"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Obsidian QA",
+    "shortDescription": "Use the official Obsidian CLI to search raw vault notes and answer from evidence.",
+    "longDescription": "A repo-local, model-agnostic skill for vault question answering. It requires the official Obsidian CLI, performs multi-query retrieval against raw notes, and answers only from opened note evidence.",
+    "developerName": "haoyueb2",
+    "category": "Productivity",
+    "capabilities": ["Interactive"],
+    "websiteURL": "https://github.com/haoyueb2/obsidian-knowledge-ingestor",
+    "privacyPolicyURL": "https://github.com/haoyueb2/obsidian-knowledge-ingestor",
+    "termsOfServiceURL": "https://github.com/haoyueb2/obsidian-knowledge-ingestor",
+    "defaultPrompt": [
+      "Use Obsidian CLI to answer from raw vault notes.",
+      "Search the vault with multiple short queries before concluding.",
+      "Quote evidence paths from notes you actually opened."
+    ],
+    "brandColor": "#2563EB"
+  }
+}
