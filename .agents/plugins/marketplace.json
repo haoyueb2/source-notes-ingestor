@@ -1,0 +1,20 @@
+{
+  "name": "obsidian-knowledge-ingestor-local",
+  "interface": {
+    "displayName": "Obsidian Knowledge Ingestor Local"
+  },
+  "plugins": [
+    {
+      "name": "obsidian-qa",
+      "source": {
+        "source": "local",
+        "path": "./plugins/obsidian-qa"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

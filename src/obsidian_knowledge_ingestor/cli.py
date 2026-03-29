@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import json
 import os
 import subprocess
@@ -11,19 +10,8 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .browser_automation import BrowserAutomationError, default_storage_state_path, default_user_data_dir, save_login_session
-from .qa_builder import CodexUnavailableError, build_scope_package
 from .config import AppConfig, DEFAULT_OBSIDIAN_VAULT_PATH, load_target
 from .pipeline import IngestReport, ingest_source
-from .qa_runner import (
-    CodexCliUnavailableError,
-    ObsidianCliUnavailableError,
-    ask_scope,
-    ask_scope_as_json,
-    open_derived_note,
-    read_note,
-    search,
-    search_scope,
-)
 from .wechat_discovery import WeChatDiscoveryError, discover_wechat_history
 from .utils import dump_json, load_json, slugify
 from .adapters.wechat import content_id_from_url
@@ -39,63 +27,10 @@ WECHAT_VERIFICATION_MARKERS = (
     "Complete the human verification",
 )
 WECHAT_DISABLE_RETRY_ENV = "OKI_WECHAT_DISABLE_RETRY"
-DEFAULT_SCOPE_ID = "linlin"
-DEFAULT_CONTEXT_MODE = "map"
 
 
 def _vault_help_text() -> str:
     return f"Override Obsidian vault path (default: {DEFAULT_OBSIDIAN_VAULT_PATH})"
-
-
-def _strip_frontmatter(text: str) -> str:
-    if not text.startswith("---\n"):
-        return text
-    parts = text.split("---\n", 2)
-    if len(parts) < 3:
-        return text
-    return parts[2]
-
-
-class _TeeStream:
-    def __init__(self, *streams):
-        self._streams = streams
-
-    def write(self, text: str) -> int:
-        for stream in self._streams:
-            stream.write(text)
-        return len(text)
-
-    def flush(self) -> None:
-        for stream in self._streams:
-            stream.flush()
-
-
-def _default_ask_log_path(config: AppConfig, scope: str) -> Path:
-    logs_dir = config.state_dir / "ask_logs"
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = time.strftime("%Y%m%d-%H%M%S")
-    return logs_dir / f"{timestamp}-{slugify(scope)}.log"
-
-
-def _answer_path_for_log(log_path: Path) -> Path:
-    return log_path.with_suffix(".md")
-
-
-def _write_ask_answer(log_path: Path, answer_markdown: str) -> Path:
-    answer_path = _answer_path_for_log(log_path)
-    answer_path.write_text(answer_markdown, encoding="utf-8")
-    return answer_path
-
-
-@contextlib.contextmanager
-def _ask_logging_context(config: AppConfig, scope: str):
-    log_path = _default_ask_log_path(config, scope)
-    with log_path.open("w", encoding="utf-8") as handle:
-        stderr_tee = _TeeStream(sys.stderr, handle)
-        stdout_tee = _TeeStream(sys.stdout, handle)
-        with contextlib.redirect_stderr(stderr_tee), contextlib.redirect_stdout(stdout_tee):
-            print(f"[oki ask] log file: {log_path}", file=sys.stderr)
-            yield log_path
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -124,50 +59,6 @@ def build_parser() -> argparse.ArgumentParser:
     discover_parser.add_argument("source", choices=["wechat"])
     discover_parser.add_argument("--target", required=True, help="Path to source target JSON")
     discover_parser.add_argument("--output-dir", help="Directory for screenshots and debug artifacts")
-
-    search_parser = subparsers.add_parser("search", help="Search the Obsidian vault via official CLI")
-    search_parser.add_argument("query")
-    search_parser.add_argument("--vault", help=_vault_help_text())
-
-    read_parser = subparsers.add_parser("read", help="Read a vault note via official CLI")
-    read_parser.add_argument("path")
-    read_parser.add_argument("--vault", help=_vault_help_text())
-    read_parser.add_argument("--body-only", action="store_true")
-
-    build_qa_parser = subparsers.add_parser("build-qa", help="Build a derived QA package for a scope")
-    build_qa_parser.add_argument("--scope", default=DEFAULT_SCOPE_ID, help=f"Scope id (default: {DEFAULT_SCOPE_ID})")
-    build_qa_parser.add_argument("--vault", help=_vault_help_text())
-    build_qa_parser.add_argument("--rebuild", action="store_true")
-
-    qa_search_parser = subparsers.add_parser("qa-search", help="Search raw scope notes through the official Obsidian CLI")
-    qa_search_parser.add_argument("--scope", default=DEFAULT_SCOPE_ID, help=f"Scope id (default: {DEFAULT_SCOPE_ID})")
-    qa_search_parser.add_argument("--query", required=True)
-    qa_search_parser.add_argument("--vault", help=_vault_help_text())
-    qa_search_parser.add_argument("--limit", type=int, default=8)
-
-    qa_read_parser = subparsers.add_parser("qa-read", help="Read a note path through the official Obsidian CLI")
-    qa_read_parser.add_argument("--path", required=True)
-    qa_read_parser.add_argument("--vault", help=_vault_help_text())
-    qa_read_parser.add_argument("--body-only", action="store_true")
-
-    qa_open_parser = subparsers.add_parser("qa-open-derived", help="Read a derived scope note through the official Obsidian CLI")
-    qa_open_parser.add_argument("--scope", default=DEFAULT_SCOPE_ID, help=f"Scope id (default: {DEFAULT_SCOPE_ID})")
-    qa_open_parser.add_argument("--kind", required=True, choices=["overview", "themes", "corpus_index", "full_context", "manifest"])
-    qa_open_parser.add_argument("--vault", help=_vault_help_text())
-    qa_open_parser.add_argument("--body-only", action="store_true")
-
-    ask_parser = subparsers.add_parser("ask", help="Run agentic Q&A against a scope")
-    ask_parser.add_argument("prompt")
-    ask_parser.add_argument("--scope", default=DEFAULT_SCOPE_ID, help=f"Scope id (default: {DEFAULT_SCOPE_ID})")
-    ask_parser.add_argument(
-        "--context-mode",
-        choices=["map", "fulltext"],
-        default=DEFAULT_CONTEXT_MODE,
-        help=f"Retrieval context mode (default: {DEFAULT_CONTEXT_MODE})",
-    )
-    ask_parser.add_argument("--agent", choices=["codex", "none"], default="codex")
-    ask_parser.add_argument("--json", action="store_true")
-    ask_parser.add_argument("--vault", help=_vault_help_text())
 
     return parser
 
@@ -333,73 +224,6 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(json.dumps(asdict(report), ensure_ascii=False, indent=2))
         return 0
-
-    if args.command == "build-qa":
-        try:
-            manifest = build_scope_package(args.scope, config.vault_path, rebuild=args.rebuild)
-        except (RuntimeError, CodexUnavailableError, FileNotFoundError, ValueError) as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
-        print(json.dumps(asdict(manifest), ensure_ascii=False, indent=2))
-        return 0
-
-    try:
-        if args.command == "search":
-            result = search(args.query, vault=args.vault, cwd=config.vault_path)
-            print(result.stdout, end="")
-            return result.returncode
-        if args.command == "read":
-            result = read_note(args.path, vault=args.vault, cwd=config.vault_path)
-            print(_strip_frontmatter(result.stdout) if args.body_only else result.stdout, end="")
-            return result.returncode
-        if args.command == "qa-search":
-            result = search_scope(args.scope, args.query, config.vault_path, limit=args.limit)
-            print(json.dumps([asdict(item) for item in result], ensure_ascii=False, indent=2))
-            return 0
-        if args.command == "qa-read":
-            result = read_note(args.path, vault=args.vault, cwd=config.vault_path)
-            if result.stdout:
-                print(_strip_frontmatter(result.stdout) if args.body_only else result.stdout, end="")
-            if result.stderr:
-                print(result.stderr, file=sys.stderr, end="")
-            return result.returncode
-        if args.command == "qa-open-derived":
-            result = open_derived_note(args.kind, args.scope, config.vault_path)
-            if result.stdout:
-                print(_strip_frontmatter(result.stdout) if args.body_only else result.stdout, end="")
-            if result.stderr:
-                print(result.stderr, file=sys.stderr, end="")
-            return result.returncode
-        if args.command == "ask":
-            if args.agent == "none":
-                payload = ask_scope_as_json(
-                    args.prompt,
-                    args.scope,
-                    config.vault_path,
-                    context_mode=args.context_mode,
-                    agent=args.agent,
-                )
-                print(payload)
-                return 0
-            with _ask_logging_context(config, args.scope) as log_path:
-                bundle = ask_scope(
-                    args.prompt,
-                    args.scope,
-                    config.vault_path,
-                    context_mode=args.context_mode,
-                    agent=args.agent,
-                    stream_final_answer=not args.json,
-                )
-                answer_path = _write_ask_answer(log_path, bundle.answer_markdown)
-                if args.json:
-                    print(json.dumps(asdict(bundle), ensure_ascii=False, indent=2))
-                elif not bundle.answer_streamed:
-                    print(bundle.answer_markdown, end="" if bundle.answer_markdown.endswith("\n") else "\n")
-                print(f"[oki ask] answer file: {answer_path}", file=sys.stderr)
-            return 0
-    except (ObsidianCliUnavailableError, CodexCliUnavailableError, RuntimeError, FileNotFoundError, ValueError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
 
     return 1
 
